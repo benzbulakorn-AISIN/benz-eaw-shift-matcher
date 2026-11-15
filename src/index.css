@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: #0F172A;
+  color: #E2E8F0;
+  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  -webkit-tap-highlight-color: transparent;
+}
+button, select, input, textarea { font: inherit; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 3px solid #A78BFA; outline-offset: 2px;
+}
+.review-pulse { animation: pulse-border 1.4s ease-in-out infinite; }
+@keyframes pulse-border { 0%,100% { border-color: #FB923C; } 50% { border-color: #7C2D12; } }
