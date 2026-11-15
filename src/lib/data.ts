@@ -1,4 +1,4 @@
-// โหลดข้อมูล / คำนวณ Matching / สรุปเดือน / เปรียบเทียบ OCR / เตรียมรูป
+// โหลดข้อมูล / คำนวณ Matching / สรุปเดือน / เปรียบเทียบ OCR / เตรียมรูป  (v2)
 import { sb } from "./supabase";
 import {
   matchDay, timeToMin, minToTime, DEFAULT_SETTINGS, WORKING,
@@ -224,16 +224,28 @@ export async function uploadAndOcr(
     .select("id").single();
   if (impErr) throw new Error(impErr.code === "23505" ? "DUPLICATE:" : impErr.message);
 
-  onStep("กำลังอ่านตาราง...");
-  const draft = await invokeOcr(imp.id);
+  onStep("กำลังอ่านตาราง... (ประมาณ 30–90 วินาที)");
+  let draft: any;
+  try {
+    draft = await invokeOcr(imp.id);
+  } catch (e) {
+    // ปลดล็อกรูปนี้ เพื่อให้เลือกรูปเดิมลองใหม่ได้
+    await sb.from("schedule_imports")
+      .update({ import_status: "failed", error_message: String((e as Error).message ?? "").slice(0, 100) })
+      .eq("id", imp.id).in("import_status", ["uploaded", "ocr_done"]);
+    throw e;
+  }
   return { importId: imp.id, draft };
 }
 
 export async function invokeOcr(importId: string) {
-  const { data, error } = await withRetry(() => sb.functions.invoke("ocr-import", { body: { importId } }), 2);
+  // ไม่เรียกซ้ำอัตโนมัติ (การอ่านรูปใช้เวลานาน) + ตัดการรอที่ 140 วินาที เพื่อไม่ให้หน้าจอค้าง
+  const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("OCR_TIMEOUT")), 140_000));
+  const { data, error } = await Promise.race([sb.functions.invoke("ocr-import", { body: { importId } }), timeout]);
   if (error) {
     let code = "OCR_FAILED";
     try { code = (await (error as any).context?.json())?.error ?? code; } catch { /* ignore */ }
+    if ((error as any).context?.status === 546) code = "OCR_TIMEOUT";
     throw new Error(code);
   }
   if (data?.error) throw new Error(data.error);
@@ -252,8 +264,10 @@ export async function finishImage(importId: string, path: string | null, keep: b
 export function errorText(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? "");
   if (msg.startsWith("DUPLICATE")) return "📷 รูปนี้นำเข้าแล้ว";
+  if (msg === "OCR_TIMEOUT") return "⏱️ อ่านรูปนานเกินไป ลองครอปให้เห็นเฉพาะตาราง แล้วลองใหม่";
   if (msg === "GEMINI_QUOTA") return "⏳ ระบบอ่านรูปไม่ว่าง ลองใหม่ใน 1 นาที";
   if (msg === "MISSING_GEMINI_KEY") return "⚙️ ยังไม่ได้ตั้งค่าระบบอ่านรูป";
+  if (/^GEMINI_HTTP_4/.test(msg)) return "⚙️ ตั้งค่าระบบอ่านรูปไม่ถูกต้อง (ตรวจ GEMINI_MODEL)";
   if (["GEMINI_BAD_JSON", "GEMINI_EMPTY", "NO_TEXT"].includes(msg)) return "📷 อ่านรูปไม่ได้ ลองแคปใหม่ให้เห็นตารางเต็มจอ";
   if (/Failed to fetch|NetworkError|network/i.test(msg)) return "📶 อินเทอร์เน็ตขัดข้อง ลองใหม่อีกครั้ง";
   if (/UNCONFIRMED_DAY/.test(msg)) return "⚠️ ยังมีวันที่ต้องตรวจ";
