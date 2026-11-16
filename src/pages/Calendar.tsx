@@ -1,4 +1,5 @@
-// 📅 ปฏิทิน (v6) — วางแทนไฟล์เดิมทั้งไฟล์
+// 📅 ปฏิทิน (v7) — วางแทนไฟล์เดิมทั้งไฟล์
+// v7: ช่อง "วันนี้" เด่นขึ้น (กรอบม่วงหนา + พื้นม่วง + เลขวันในวงกลม + ป้าย วันนี้)
 // - แถบเดือนติดใต้ header · แตะชื่อเดือนกลับเดือนนี้ · ปัด/กด ‹ › เปลี่ยนเดือน
 // - ดึงลงเพื่ออัปเดต · Skeleton · ออฟไลน์ใช้ข้อมูลที่เก็บไว้
 // - ไอคอนวันพิเศษ (🎂💍🥂) + วันอ้างอิง (🏛️ วันหยุดราชการ · 💰 เงินเดือนออก) ที่มุมช่องวันที่
@@ -69,7 +70,9 @@ export default function Calendar() {
         .slide-1 { animation: cal-in-r .28s ease-out; } .slide--1 { animation: cal-in-l .28s ease-out; }
         @keyframes cal-in-r { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
         @keyframes cal-in-l { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
-        @media (prefers-reduced-motion: reduce) { .slide-1, .slide--1 { animation: none; } }
+        .today-cell { animation: today-glow 2.4s ease-in-out infinite; }
+        @keyframes today-glow { 0%,100% { box-shadow: 0 0 0 0 rgb(139 92 246 / .45); } 50% { box-shadow: 0 0 0 5px rgb(139 92 246 / 0); } }
+        @media (prefers-reduced-motion: reduce) { .slide-1, .slide--1, .today-cell { animation: none; } }
       `}</style>
       <div className="flex flex-col gap-3">
         {/* แถบเดือน: sticky ต่อจาก header */}
@@ -117,10 +120,19 @@ export default function Calendar() {
               return (
                 <button key={d.date} type="button" onClick={() => openDay(d.date)}
                   aria-label={`${shortDate(d.date)} Benz ${b.text} Eaw ${e.text}${label ? ` ${label}` : ""}`}
-                  className={`card flex min-h-[86px] min-w-0 flex-col gap-1 rounded-xl border p-1 ${evs.length ? "bg-pink-500/10" : "bg-slate-800"} ${isToday ? "border-violet-500 ring-2 ring-violet-500/40" : evs.length ? "border-pink-400/60" : "border-slate-700"}`}
+                  className={`card relative flex min-h-[86px] min-w-0 flex-col gap-1 rounded-xl p-1 ${isToday
+                    ? "today-cell z-[1] border-[3px] border-violet-500 bg-violet-500/20 shadow-lg shadow-violet-500/30"
+                    : `border ${evs.length ? "border-pink-400/60 bg-pink-500/10" : "border-slate-700 bg-slate-800"}`}`}
                   style={{ boxShadow: `inset 0 -3px 0 ${lc}` }}>
-                  <span className={`flex items-center justify-between px-0.5 text-xs font-bold ${isToday ? "text-violet-300" : ""}`}>
-                    {Number(d.date.slice(8))}
+                  {isToday && (
+                    <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-extrabold leading-none text-white shadow">
+                      วันนี้
+                    </span>
+                  )}
+                  <span className="flex items-center justify-between px-0.5 text-xs font-bold">
+                    {isToday
+                      ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[11px] font-extrabold text-white">{Number(d.date.slice(8))}</span>
+                      : Number(d.date.slice(8))}
                     {icons && <span className="text-[11px] leading-none" aria-hidden>{icons}</span>}
                   </span>
                   <span className="flex h-5 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md leading-none" style={{ background: b.color + "33" }}>
