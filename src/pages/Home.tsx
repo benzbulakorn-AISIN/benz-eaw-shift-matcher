@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { loadDays, type DayInfo } from "../lib/data";
 import { todayBkk, addDays, shortDate, DOW_SHORT, dowOf } from "../lib/dateBkk";
 import { LEVEL_ICON, LEVEL_COLOR, suggestion, durationTh, minToTime, type MatchResult } from "../lib/matching";
-import { useApp, Card, Row, Spinner, TimeBar, TimeScale, benzLabel, eawLabel, C } from "../components/ui";
+import { useApp, Card, Row, TimeBar, TimeScale, benzLabel, eawLabel, C } from "../components/ui";
 import TodayTimeline from "../components/TodayTimeline";
+import PullToRefresh from "../components/PullToRefresh";
+import { HomeSkeleton } from "../components/Skeleton";
 
 const LEVEL_TEXT: Record<string, string> = {
   green: "ว่างตรงกันเยอะ", yellow: "ว่างตรงกันพอดี", orange: "ว่างตรงกันนิดหน่อย", red: "ไม่ว่างตรงกัน", incomplete: "ข้อมูลไม่ครบ",
@@ -24,14 +26,21 @@ export default function Home() {
     return () => window.clearInterval(t);
   }, []);
 
-  useEffect(() => {
+  const load = useCallback(() =>
     loadDays(today, addDays(today, 8), types, profiles)
       .then(d => { setDays(d); setError(""); })
-      .catch(() => setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง"));
-  }, [types, profiles, version, today]);
+      .catch(() => setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง")),
+  [today, types, profiles]);
+  useEffect(() => { load(); }, [load, version]);
 
-  if (error) return <p className="py-8 text-center text-rose-400">{error}</p>;
-  if (!days) return <Spinner />;
+  if (error && !days) return (
+    <div className="flex flex-col items-center gap-3 py-12 text-center">
+      <span className="text-4xl" aria-hidden>📶</span>
+      <p className="font-semibold">{error}</p>
+      <button type="button" onClick={() => { setError(""); load(); }} className="min-h-12 rounded-xl bg-slate-800 px-5 font-semibold">🔄 ลองใหม่</button>
+    </div>
+  );
+  if (!days) return <HomeSkeleton />;
 
   const [todayInfo, tomorrow, ...rest] = days;
   const r = tomorrow.result;
@@ -40,7 +49,8 @@ export default function Home() {
   const eawColor = typeMap.get(tomorrow.shift?.code ?? "")?.color ?? C.none;
 
   return (
-    <div className="flex flex-col gap-3">
+    <PullToRefresh onRefresh={load}>
+    <div className="fade-in flex flex-col gap-3">
       {/* ===== วันนี้: ไทม์ไลน์ + เวลาปัจจุบัน ===== */}
       <TodayTimeline day={todayInfo} />
 
@@ -114,5 +124,6 @@ export default function Home() {
         </button>
       )}
     </div>
+    </PullToRefresh>
   );
 }

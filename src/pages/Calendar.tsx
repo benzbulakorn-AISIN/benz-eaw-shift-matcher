@@ -1,11 +1,13 @@
 // 📅 ปฏิทิน (v3)
 // - แถบเดือนติดใต้ header (ไม่ถูกทับ) · แตะชื่อเดือนเพื่อกลับเดือนนี้ · ปัดซ้าย/ขวาเปลี่ยนเดือน
 // - ไอคอน 2 ตัว (🌅🌆) ย่อให้พอดีช่อง
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { loadDays, monthlySummary, type DayInfo } from "../lib/data";
 import { todayBkk, monthRange, dowOf, MONTH_TH, shortDate } from "../lib/dateBkk";
 import { LEVEL_ICON, LEVEL_COLOR, durationTh } from "../lib/matching";
-import { useApp, Card, Spinner, benzLabel, eawLabel } from "../components/ui";
+import { useApp, Card, benzLabel, eawLabel } from "../components/ui";
+import PullToRefresh from "../components/PullToRefresh";
+import { CalendarSkeleton } from "../components/Skeleton";
 
 const HEAD = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"];
 // ไอคอนหลายตัว (เช่น 🌅🌆) ใช้ตัวเล็กลง
@@ -19,6 +21,7 @@ export default function Calendar() {
   const [days, setDays] = useState<DayInfo[] | null>(null);
   const [error, setError] = useState("");
   const [top, setTop] = useState(64);
+  const [dir, setDir] = useState<0 | 1 | -1>(0);
   const touchX = useRef<number | null>(null);
 
   // วัดความสูง header จริง → แถบเดือนติดต่อจาก header พอดี (รวม safe-area ของ iPhone)
@@ -32,30 +35,38 @@ export default function Calendar() {
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    setDays(null);
+  const load = useCallback(() => {
     const [from, to] = monthRange(ym.y, ym.m);
-    loadDays(from, to, types, profiles)
+    return loadDays(from, to, types, profiles)
       .then(d => { setDays(d); setError(""); })
       .catch(() => setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง"));
-  }, [ym, types, profiles, version]);
+  }, [ym, types, profiles]);
+  useEffect(() => { setDays(null); }, [ym]);
+  useEffect(() => { load(); }, [load, version]);
 
-  const move = (n: number) => setYm(({ y, m }) => {
+  const move = (n: number) => { setDir(n > 0 ? 1 : -1); setYm(({ y, m }) => {
     const k = y * 12 + (m - 1) + n;
     return { y: Math.floor(k / 12), m: (k % 12) + 1 };
-  });
+  }); };
   const isCurrent = ym.y === cur.y && ym.m === cur.m;
 
   const lead = days ? (dowOf(days[0].date) + 6) % 7 : 0;
   const sum = days ? monthlySummary(days) : null;
 
   return (
+    <PullToRefresh onRefresh={load}>
+    <style>{`
+      .slide-1 { animation: cal-in-r .28s ease-out; } .slide--1 { animation: cal-in-l .28s ease-out; }
+      @keyframes cal-in-r { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+      @keyframes cal-in-l { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+      @media (prefers-reduced-motion: reduce) { .slide-1, .slide--1 { animation: none; } }
+    `}</style>
     <div className="flex flex-col gap-3">
       {/* แถบเดือน: sticky ต่อจาก header */}
       <div className="sticky z-[9] -mx-3 bg-slate-900/90 px-3 pb-2 pt-1 backdrop-blur sm:-mx-4 sm:px-4" style={{ top }}>
         <div className="flex items-center justify-between gap-2">
           <button type="button" onClick={() => move(-1)} className="card h-11 w-11 shrink-0 rounded-full border border-slate-700 bg-slate-800 text-xl" aria-label="เดือนก่อน">‹</button>
-          <button type="button" onClick={() => setYm(cur)} disabled={isCurrent}
+          <button type="button" onClick={() => { setDir(ym.y * 12 + ym.m > cur.y * 12 + cur.m ? -1 : 1); setYm(cur); }} disabled={isCurrent}
             className="flex flex-col items-center leading-tight" aria-label="กลับเดือนนี้">
             <span className="text-lg font-extrabold">{MONTH_TH[ym.m - 1]} {ym.y + 543}</span>
             {!isCurrent && <span className="text-[11px] font-semibold text-violet-300">แตะเพื่อกลับเดือนนี้</span>}
@@ -72,9 +83,9 @@ export default function Calendar() {
       </div>
 
       {error && <p className="text-center text-rose-400">{error}</p>}
-      {!days && !error && <Spinner />}
+      {!days && !error && <CalendarSkeleton />}
       {days && (
-        <div className="fade-in grid grid-cols-7 gap-1"
+        <div key={`${ym.y}-${ym.m}`} className={`grid grid-cols-7 gap-1 ${dir ? `slide-${dir}` : "fade-in"}`}
           onTouchStart={e => { touchX.current = e.touches[0].clientX; }}
           onTouchEnd={e => {
             if (touchX.current === null) return;
@@ -147,7 +158,13 @@ export default function Calendar() {
           </ol>
         </Card>
       )}
+      {days && !days.some(d => d.shift) && (
+        <p className="rounded-2xl border border-dashed border-slate-600 px-4 py-3 text-center text-sm text-slate-400">
+          📭 เดือนนี้ยังไม่มีเวรของ Eaw · ไปที่ 📤 อัปโหลดเวร
+        </p>
+      )}
     </div>
+    </PullToRefresh>
   );
 }
 

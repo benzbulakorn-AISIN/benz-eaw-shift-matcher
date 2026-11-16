@@ -2,7 +2,7 @@
 // - Benz: แก้ OT ของตัวเอง + แก้เวรของ Eaw แทนได้
 // - Eaw: แก้เวรของตัวเอง
 // - หมายเหตุของใครของมัน · ปุ่มบันทึก 1 ปุ่ม (บันทึกทุกช่องพร้อมกัน)
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { sb } from "../lib/supabase";
 import { loadDays, recompute, isWorking, settingsFromRow, loadSettingsRow, type DayInfo } from "../lib/data";
 import { addDays, thaiDate } from "../lib/dateBkk";
@@ -10,7 +10,8 @@ import {
   matchDay, minToTime, union, LEVEL_ICON, LEVEL_COLOR, windowsText, suggestion,
   DEFAULT_SETTINGS, type Settings, type BenzDay,
 } from "../lib/matching";
-import { useApp, TimeBar, TimeScale, PrimaryButton, Spinner, benzLabel, Row, timeOptions, C } from "./ui";
+import { SheetSkeleton } from "./Skeleton";
+import { useApp, TimeBar, TimeScale, PrimaryButton, benzLabel, Row, timeOptions, C } from "./ui";
 
 type OtMode = "none" | "unknown" | "time";
 
@@ -32,6 +33,29 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   const [note, setNote] = useState("");
   const [init, setInit] = useState("");
 
+  // ปัดลงเพื่อปิด (เริ่มปัดได้เมื่อเนื้อหาเลื่อนอยู่บนสุด)
+  const panel = useRef<HTMLDivElement>(null);
+  const dragY = useRef<number | null>(null);
+  const [drag, setDrag] = useState(0);
+  const [closing, setClosing] = useState(false);
+  const close = () => { setClosing(true); window.setTimeout(onClose, 200); };
+  const onTouchStart = (e: TouchEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (["SELECT", "INPUT", "TEXTAREA"].includes(tag)) return;
+    if ((panel.current?.scrollTop ?? 0) > 0) return;
+    dragY.current = e.touches[0].clientY;
+  };
+  const onTouchMove = (e: TouchEvent) => {
+    if (dragY.current === null) return;
+    const dy = e.touches[0].clientY - dragY.current;
+    setDrag(dy > 0 ? dy : 0);
+  };
+  const onTouchEnd = () => {
+    if (dragY.current === null) return;
+    dragY.current = null;
+    if (drag > 110) close(); else setDrag(0);
+  };
+
   useEffect(() => {
     Promise.all([loadDays(date, date, types, profiles), loadSettingsRow().catch(() => null)])
       .then(([[d], row]) => {
@@ -49,7 +73,7 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   }, [date, version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
@@ -118,7 +142,7 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
       }
       await recompute(addDays(date, -1), date, types, profiles);
       toast(isBenz && shiftDirty ? "บันทึกแล้ว ✅ (แก้เวรแทน Eaw)" : "บันทึกแล้ว ✅");
-      onClose();
+      close();
     } catch (e) {
       const m = (e as { message?: string })?.message ?? "";
       toast(/row-level security/i.test(m) ? "🔒 ไม่มีสิทธิ์แก้เวรนี้ (รัน SQL 011)" : "❌ บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -131,16 +155,22 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   const r = preview;
 
   return (
-    <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/50 backdrop-blur-[2px] sm:items-center" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={`รายละเอียด ${thaiDate(date)}`} onClick={e => e.stopPropagation()}
-        className="fade-in max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl">
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-600" aria-hidden />
+    <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 sm:items-center"
+      style={{ opacity: closing ? 0 : Math.max(0.3, 1 - drag / 400) }} onClick={close}>
+      <style>{`.sheet-in { animation: sheet-up .28s cubic-bezier(.2,.8,.2,1); } @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+        @media (prefers-reduced-motion: reduce) { .sheet-in { animation: none; } }`}</style>
+      <div ref={panel} role="dialog" aria-modal="true" aria-label={`รายละเอียด ${thaiDate(date)}`} onClick={e => e.stopPropagation()}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}
+        style={{ transform: closing ? "translateY(100%)" : drag ? `translateY(${drag}px)` : undefined,
+          transition: dragY.current === null ? "transform .2s ease" : "none", overscrollBehavior: "contain" }}
+        className="sheet-in max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl">
+        <div className="-mt-2 flex justify-center py-2" aria-hidden><span className="h-1.5 w-10 rounded-full bg-slate-600" /></div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-extrabold">{thaiDate(date, true)}</h2>
-          <button type="button" onClick={onClose} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="ปิด">✕</button>
+          <button type="button" onClick={close} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="ปิด">✕</button>
         </div>
         {error && <p className="text-rose-400">{error}</p>}
-        {!day && !error && <Spinner />}
+        {!day && !error && <SheetSkeleton />}
         {day && r && (
           <div className="flex flex-col gap-3">
             <div className="rounded-2xl p-3" style={{ background: LEVEL_COLOR[r.level] + "1f" }}>
