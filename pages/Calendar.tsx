@@ -1,0 +1,229 @@
+// 📅 ปฏิทิน (v7) — วางแทนไฟล์เดิมทั้งไฟล์
+// v7: ช่อง "วันนี้" เด่นขึ้น (กรอบม่วงหนา + พื้นม่วง + เลขวันในวงกลม + ป้าย วันนี้)
+// - แถบเดือนติดใต้ header · แตะชื่อเดือนกลับเดือนนี้ · ปัด/กด ‹ › เปลี่ยนเดือน
+// - ดึงลงเพื่ออัปเดต · Skeleton · ออฟไลน์ใช้ข้อมูลที่เก็บไว้
+// - ไอคอนวันพิเศษ (🎂💍🥂) + วันอ้างอิง (🏛️ วันหยุดราชการ · 💰 เงินเดือนออก) ที่มุมช่องวันที่
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { loadDays, monthlySummary, type DayInfo } from "../lib/data";
+import { todayBkk, monthRange, dowOf, MONTH_TH, shortDate } from "../lib/dateBkk";
+import { LEVEL_ICON, LEVEL_COLOR, durationTh } from "../lib/matching";
+import { useApp, Card, benzLabel, eawLabel } from "../components/ui";
+import PullToRefresh from "../components/PullToRefresh";
+import OfflineBar from "../components/OfflineBar";
+import { CalendarSkeleton } from "../components/Skeleton";
+import ReferenceMonth from "../components/ReferenceMonth";
+import { useRefDates, refsOn, REF_ICON } from "../lib/reference";
+import { saveCache, readCache, useEvents, eventsOn, occLabel } from "../lib/special";
+
+const HEAD = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"];
+const iconSize = (icon: string) => ([...icon].filter(ch => /\p{Extended_Pictographic}/u.test(ch)).length > 1 ? "text-[10px]" : "text-[13px]");
+
+export default function Calendar() {
+  const { types, profiles, typeMap, version, openDay } = useApp();
+  const events = useEvents(version);
+  const t = todayBkk();
+  const cur = { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) };
+  const [ym, setYm] = useState(cur);
+  const refs = useRefDates(ym.y);
+  const [days, setDays] = useState<DayInfo[] | null>(null);
+  const [error, setError] = useState("");
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [top, setTop] = useState(64);
+  const [dir, setDir] = useState<0 | 1 | -1>(0);
+  const touchX = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const h = document.querySelector("header");
+    if (!h) return;
+    const update = () => setTop(h.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(h);
+    return () => ro.disconnect();
+  }, []);
+
+  const load = useCallback(() => {
+    const [from, to] = monthRange(ym.y, ym.m);
+    return loadDays(from, to, types, profiles)
+      .then(d => { setDays(d); setError(""); setCachedAt(null); saveCache(`cal_${ym.y}_${ym.m}`, d); })
+      .catch(() => {
+        const c = readCache<DayInfo[]>(`cal_${ym.y}_${ym.m}`);
+        if (c) { setDays(c.data); setCachedAt(c.at); setError(""); }
+        else setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง");
+      });
+  }, [ym, types, profiles]);
+  useEffect(() => { setDays(null); }, [ym]);
+  useEffect(() => { load(); }, [load, version]);
+
+  const move = (n: number) => {
+    setDir(n > 0 ? 1 : -1);
+    setYm(({ y, m }) => { const k = y * 12 + (m - 1) + n; return { y: Math.floor(k / 12), m: (k % 12) + 1 }; });
+  };
+  const isCurrent = ym.y === cur.y && ym.m === cur.m;
+  const lead = days ? (dowOf(days[0].date) + 6) % 7 : 0;
+  const sum = days ? monthlySummary(days) : null;
+  const monthEvents = days ? days.flatMap(d => eventsOn(d.date, events)) : [];
+
+  return (
+    <PullToRefresh onRefresh={load}>
+      <style>{`
+        .slide-1 { animation: cal-in-r .28s ease-out; } .slide--1 { animation: cal-in-l .28s ease-out; }
+        @keyframes cal-in-r { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+        @keyframes cal-in-l { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+        .today-cell { animation: today-glow 2.4s ease-in-out infinite; }
+        @keyframes today-glow { 0%,100% { box-shadow: 0 0 0 0 rgb(139 92 246 / .45); } 50% { box-shadow: 0 0 0 5px rgb(139 92 246 / 0); } }
+        @media (prefers-reduced-motion: reduce) { .slide-1, .slide--1, .today-cell { animation: none; } }
+      `}</style>
+      <div className="flex flex-col gap-3">
+        {/* แถบเดือน: sticky ต่อจาก header */}
+        <div className="sticky z-[9] -mx-3 bg-slate-900/90 px-3 pb-2 pt-1 backdrop-blur sm:-mx-4 sm:px-4" style={{ top }}>
+          <div className="flex items-center justify-between gap-2">
+            <button type="button" onClick={() => move(-1)} className="card h-11 w-11 shrink-0 rounded-full border border-slate-700 bg-slate-800 text-xl" aria-label="เดือนก่อน">‹</button>
+            <button type="button" onClick={() => { setDir(ym.y * 12 + ym.m > cur.y * 12 + cur.m ? -1 : 1); setYm(cur); }} disabled={isCurrent}
+              className="flex flex-col items-center leading-tight" aria-label="กลับเดือนนี้">
+              <span className="text-lg font-extrabold">{MONTH_TH[ym.m - 1]} {ym.y + 543}</span>
+              {!isCurrent && <span className="text-[11px] font-semibold text-violet-300">แตะเพื่อกลับเดือนนี้</span>}
+            </button>
+            <button type="button" onClick={() => move(1)} className="card h-11 w-11 shrink-0 rounded-full border border-slate-700 bg-slate-800 text-xl" aria-label="เดือนถัดไป">›</button>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 text-[11px] text-slate-400">
+            <span>บน = Benz</span><span>กลาง = Eaw</span>
+            <span>💚 &gt;6ชม.</span><span>💛 2–6</span><span>🧡 &lt;2</span><span>❤️ ไม่ว่าง</span>
+            <span>🏛️ หยุดราชการ</span><span>💰 เงินเดือน</span>
+          </div>
+          <div className="mt-1.5 grid grid-cols-7 gap-1">
+            {HEAD.map((h, i) => <div key={h} className={`text-center text-xs font-bold ${i >= 5 ? "text-rose-400" : "text-slate-400"}`}>{h}</div>)}
+          </div>
+        </div>
+
+        <OfflineBar cachedAt={cachedAt} />
+        {error && <p className="text-center text-rose-400">{error}</p>}
+        {!days && !error && <CalendarSkeleton />}
+        {days && (
+          <div key={`${ym.y}-${ym.m}`} className={`grid grid-cols-7 gap-1 ${dir ? `slide-${dir}` : "fade-in"}`}
+            onTouchStart={e => { touchX.current = e.touches[0].clientX; }}
+            onTouchEnd={e => {
+              if (touchX.current === null) return;
+              const dx = e.changedTouches[0].clientX - touchX.current;
+              touchX.current = null;
+              if (Math.abs(dx) > 60) move(dx < 0 ? 1 : -1);
+            }}>
+            {Array.from({ length: lead }).map((_, i) => <div key={`b${i}`} />)}
+            {days.map(d => {
+              const b = benzLabel(d), e = eawLabel(d, typeMap);
+              const lc = LEVEL_COLOR[d.result.level];
+              const isToday = d.date === t;
+              const evs = eventsOn(d.date, events);
+              const rs = refsOn(d.date, refs);
+              const icons = [...evs.map(o => o.ev.icon), ...rs.map(r => REF_ICON[r.kind])].slice(0, 2).join("");
+              const label = [...evs.map(o => o.ev.title), ...rs.map(r => r.title)].join(" ");
+              return (
+                <button key={d.date} type="button" onClick={() => openDay(d.date)}
+                  aria-label={`${shortDate(d.date)} Benz ${b.text} Eaw ${e.text}${label ? ` ${label}` : ""}`}
+                  className={`card relative flex min-h-[86px] min-w-0 flex-col gap-1 rounded-xl p-1 ${isToday
+                    ? "today-cell z-[1] border-[3px] border-violet-500 bg-violet-500/20 shadow-lg shadow-violet-500/30"
+                    : `border ${evs.length ? "border-pink-400/60 bg-pink-500/10" : "border-slate-700 bg-slate-800"}`}`}
+                  style={{ boxShadow: `inset 0 -3px 0 ${lc}` }}>
+                  {isToday && (
+                    <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-extrabold leading-none text-white shadow">
+                      วันนี้
+                    </span>
+                  )}
+                  <span className="flex items-center justify-between px-0.5 text-xs font-bold">
+                    {isToday
+                      ? <span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[11px] font-extrabold text-white">{Number(d.date.slice(8))}</span>
+                      : Number(d.date.slice(8))}
+                    {icons && <span className="text-[11px] leading-none" aria-hidden>{icons}</span>}
+                  </span>
+                  <span className="flex h-5 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md leading-none" style={{ background: b.color + "33" }}>
+                    <span className={iconSize(b.icon)} aria-hidden>{b.icon}</span>
+                    <span className="hidden truncate text-[11px] text-slate-200 md:inline">{b.text}</span>
+                  </span>
+                  <span className="flex h-5 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md leading-none" style={{ background: e.color + "33" }}>
+                    <span className={`tracking-[-0.15em] ${iconSize(e.icon)}`} aria-hidden>{e.icon}</span>
+                    <span className="hidden truncate text-[11px] text-slate-200 md:inline">{e.text}</span>
+                  </span>
+                  <span className="text-center text-sm leading-none">{LEVEL_ICON[d.result.level]}
+                    <span className="hidden text-[11px] font-semibold md:inline"> {d.result.level === "incomplete" ? "" : durationTh(d.result.totalMinutes)}</span></span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 📋 วันหยุดราชการ + วันเงินเดือนออก ของเดือนนี้ */}
+        <ReferenceMonth y={ym.y} m={ym.m} />
+
+        {/* วันพิเศษในเดือนนี้ */}
+        {monthEvents.length > 0 && (
+          <Card className="!p-3">
+            <p className="mb-1.5 text-sm font-bold text-slate-400">🎉 วันพิเศษเดือนนี้</p>
+            <div className="flex flex-col gap-1">
+              {monthEvents.map(o => (
+                <button key={`${o.ev.id}-${o.date}`} type="button" onClick={() => openDay(o.date)}
+                  className="flex items-center gap-2 rounded-xl bg-pink-500/10 px-3 py-2 text-left text-sm">
+                  <span className="text-lg" aria-hidden>{o.ev.icon}</span>
+                  <span className="min-w-0 flex-1 truncate font-semibold">{occLabel(o)}</span>
+                  <span className="shrink-0 text-slate-400">{shortDate(o.date)}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {sum && (
+          <Card>
+            <h3 className="mb-3 text-lg font-extrabold">📊 สรุปเดือนนี้</h3>
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              <Stat icon="💞" k="วันที่ว่างตรงกัน" v={sum.freeDays} unit="วัน" />
+              <Stat icon="🌆" k="เย็นที่ว่างตรงกัน" v={sum.freeEvenings} unit="เย็น" />
+              <Stat icon="🏖️" k="หยุดตรงกันทั้งวัน" v={sum.bothOffFullDay} unit="วัน" />
+              <Stat icon="⏱️" k="Benz มี OT" v={sum.otDays} unit="วัน" />
+            </dl>
+            {sum.leaveDays > 0 && <p className="mt-2 text-sm text-slate-400">💗 Benz ลา (จาก QE Tracker) {sum.leaveDays} วัน</p>}
+
+            <p className="mt-4 text-sm font-semibold text-slate-400">เวรของ Eaw</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5 text-sm">
+              {types.filter(x => !x.needs_confirm).map(x => (
+                <span key={x.code} className="rounded-full px-2.5 py-1 font-semibold" style={{ background: x.color + "2e" }}>
+                  {x.icon} {x.label_th} <b>{sum.shiftCounts[x.code] ?? 0}</b>
+                </span>
+              ))}
+            </div>
+
+            <p className="mt-4 text-sm font-semibold text-slate-400">🏆 วันที่เหมาะนัดที่สุด</p>
+            {sum.bestDays.length === 0 && <p className="text-sm">ยังไม่มีข้อมูลพอ</p>}
+            <ol className="mt-1.5 flex flex-col gap-1.5">
+              {sum.bestDays.map((d, i) => (
+                <li key={d.date}>
+                  <button type="button" onClick={() => openDay(d.date)}
+                    className="flex w-full items-center justify-between rounded-xl bg-slate-700/60 px-3 py-2.5 text-left">
+                    <span className="flex items-center gap-2">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-600 text-xs font-bold text-white">{i + 1}</span>
+                      {shortDate(d.date)} {eventsOn(d.date, events).map(o => o.ev.icon).join("")}
+                    </span>
+                    <span className="font-semibold tabular-nums">{LEVEL_ICON[d.result.level]} {durationTh(d.result.totalMinutes)}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        )}
+        {days && !days.some(d => d.shift) && (
+          <p className="rounded-2xl border border-dashed border-slate-600 px-4 py-3 text-center text-sm text-slate-400">
+            📭 เดือนนี้ยังไม่มีเวรของ Eaw · ไปที่ 📤 อัปโหลดเวร
+          </p>
+        )}
+      </div>
+    </PullToRefresh>
+  );
+}
+
+function Stat({ icon, k, v, unit }: { icon: string; k: string; v: number; unit: string }) {
+  return (
+    <div className="rounded-xl bg-slate-700/60 p-3">
+      <dt className="text-slate-400">{icon} {k}</dt>
+      <dd className="text-2xl font-extrabold tabular-nums">{v} <span className="text-sm font-semibold text-slate-400">{unit}</span></dd>
+    </div>
+  );
+}
