@@ -6,7 +6,7 @@ import { MONTH_SHORT, MONTH_TH, daysInMonth, isoOf, shortDate, todayBkk } from "
 import { minToTime } from "../lib/matching";
 import { useApp, Card, PrimaryButton, Spinner, DAY_TYPE_LABEL, timeOptions } from "../components/ui";
 import ReviewGrid, { type ReviewCell } from "../components/ReviewGrid";
-
+import ChangePasscode from "../components/ChangePasscode";
 export default function Settings() {
   const { me } = useApp();
   return (
@@ -17,6 +17,7 @@ export default function Settings() {
       <Section icon="🔤" title="คำเรียกเวร"><MappingSection /></Section>
       <Section icon="📜" title="ประวัติ"><HistorySection /></Section>
       <Section icon="💾" title="สำรองข้อมูล"><BackupSection /></Section>
+      <Section icon="🔑" title="เปลี่ยนรหัส 6 หลัก"><ChangePasscode /></Section>
       <button type="button" onClick={() => sb.auth.signOut()} className="min-h-12 rounded-xl bg-slate-800 font-semibold">
         🚪 ออกจากระบบ ({me.role === "bulakorn" ? "Benz" : "Eaw"})
       </button>
