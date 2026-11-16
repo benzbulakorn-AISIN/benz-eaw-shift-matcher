@@ -1,7 +1,7 @@
-// 📅 ปฏิทิน (v5)
-// - แถบเดือนติดใต้ header · แตะชื่อเดือนกลับเดือนนี้ · ปัด/กด ‹ › เปลี่ยนเดือน (มีอนิเมชัน)
+// 📅 ปฏิทิน (v6) — วางแทนไฟล์เดิมทั้งไฟล์
+// - แถบเดือนติดใต้ header · แตะชื่อเดือนกลับเดือนนี้ · ปัด/กด ‹ › เปลี่ยนเดือน
 // - ดึงลงเพื่ออัปเดต · Skeleton · ออฟไลน์ใช้ข้อมูลที่เก็บไว้
-// - ไอคอนวันพิเศษ (🎂💍🥂 …) ที่มุมช่องวันที่
+// - ไอคอนวันพิเศษ (🎂💍🥂) + วันอ้างอิง (🏛️ วันหยุดราชการ · 💰 เงินเดือนออก) ที่มุมช่องวันที่
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { loadDays, monthlySummary, type DayInfo } from "../lib/data";
 import { todayBkk, monthRange, dowOf, MONTH_TH, shortDate } from "../lib/dateBkk";
@@ -10,6 +10,8 @@ import { useApp, Card, benzLabel, eawLabel } from "../components/ui";
 import PullToRefresh from "../components/PullToRefresh";
 import OfflineBar from "../components/OfflineBar";
 import { CalendarSkeleton } from "../components/Skeleton";
+import ReferenceMonth from "../components/ReferenceMonth";
+import { useRefDates, refsOn, REF_ICON } from "../lib/reference";
 import { saveCache, readCache, useEvents, eventsOn, occLabel } from "../lib/special";
 
 const HEAD = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"];
@@ -21,6 +23,7 @@ export default function Calendar() {
   const t = todayBkk();
   const cur = { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) };
   const [ym, setYm] = useState(cur);
+  const refs = useRefDates(ym.y);
   const [days, setDays] = useState<DayInfo[] | null>(null);
   const [error, setError] = useState("");
   const [cachedAt, setCachedAt] = useState<number | null>(null);
@@ -83,6 +86,7 @@ export default function Calendar() {
           <div className="mt-1.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 text-[11px] text-slate-400">
             <span>บน = Benz</span><span>กลาง = Eaw</span>
             <span>💚 &gt;6ชม.</span><span>💛 2–6</span><span>🧡 &lt;2</span><span>❤️ ไม่ว่าง</span>
+            <span>🏛️ หยุดราชการ</span><span>💰 เงินเดือน</span>
           </div>
           <div className="mt-1.5 grid grid-cols-7 gap-1">
             {HEAD.map((h, i) => <div key={h} className={`text-center text-xs font-bold ${i >= 5 ? "text-rose-400" : "text-slate-400"}`}>{h}</div>)}
@@ -107,14 +111,17 @@ export default function Calendar() {
               const lc = LEVEL_COLOR[d.result.level];
               const isToday = d.date === t;
               const evs = eventsOn(d.date, events);
+              const rs = refsOn(d.date, refs);
+              const icons = [...evs.map(o => o.ev.icon), ...rs.map(r => REF_ICON[r.kind])].slice(0, 2).join("");
+              const label = [...evs.map(o => o.ev.title), ...rs.map(r => r.title)].join(" ");
               return (
                 <button key={d.date} type="button" onClick={() => openDay(d.date)}
-                  aria-label={`${shortDate(d.date)} Benz ${b.text} Eaw ${e.text}${evs.length ? ` ${evs.map(o => o.ev.title).join(" ")}` : ""}`}
+                  aria-label={`${shortDate(d.date)} Benz ${b.text} Eaw ${e.text}${label ? ` ${label}` : ""}`}
                   className={`card flex min-h-[86px] min-w-0 flex-col gap-1 rounded-xl border p-1 ${evs.length ? "bg-pink-500/10" : "bg-slate-800"} ${isToday ? "border-violet-500 ring-2 ring-violet-500/40" : evs.length ? "border-pink-400/60" : "border-slate-700"}`}
                   style={{ boxShadow: `inset 0 -3px 0 ${lc}` }}>
                   <span className={`flex items-center justify-between px-0.5 text-xs font-bold ${isToday ? "text-violet-300" : ""}`}>
                     {Number(d.date.slice(8))}
-                    {evs.length > 0 && <span className="text-[11px] leading-none" aria-hidden>{evs.slice(0, 2).map(o => o.ev.icon).join("")}</span>}
+                    {icons && <span className="text-[11px] leading-none" aria-hidden>{icons}</span>}
                   </span>
                   <span className="flex h-5 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md leading-none" style={{ background: b.color + "33" }}>
                     <span className={iconSize(b.icon)} aria-hidden>{b.icon}</span>
@@ -131,6 +138,9 @@ export default function Calendar() {
             })}
           </div>
         )}
+
+        {/* 📋 วันหยุดราชการ + วันเงินเดือนออก ของเดือนนี้ */}
+        <ReferenceMonth y={ym.y} m={ym.m} />
 
         {/* วันพิเศษในเดือนนี้ */}
         {monthEvents.length > 0 && (
