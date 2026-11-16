@@ -7,6 +7,7 @@ import TodayTimeline from "../components/TodayTimeline";
 import PullToRefresh from "../components/PullToRefresh";
 import OfflineBar from "../components/OfflineBar";
 import EventBanner from "../components/EventBanner";
+import CoupleHero from "../components/CoupleHero";
 import { HomeSkeleton } from "../components/Skeleton";
 import { saveCache, readCache, useEvents, eventsOn } from "../lib/special";
 
@@ -62,6 +63,7 @@ export default function Home() {
     <PullToRefresh onRefresh={load}>
       <div className="fade-in flex flex-col gap-3">
         <OfflineBar cachedAt={cachedAt} />
+        <CoupleHero days={days} />
         <EventBanner today={today} events={events} />
 
         {/* ===== วันนี้: ไทม์ไลน์ + เวลาปัจจุบัน ===== */}
