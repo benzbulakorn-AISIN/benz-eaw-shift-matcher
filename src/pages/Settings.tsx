@@ -9,13 +9,15 @@ import { minToTime } from "../lib/matching";
 import { useApp, PrimaryButton, Spinner, DAY_TYPE_LABEL, timeOptions } from "../components/ui";
 import ReviewGrid, { type ReviewCell } from "../components/ReviewGrid";
 import ChangePasscode from "../components/ChangePasscode";
+import { loadAnniversary } from "../lib/special";
 
-type Key = "line" | "focus" | "calendar" | "mapping" | "history" | "passcode" | "backup";
+type Key = "line" | "focus" | "anniversary" | "calendar" | "mapping" | "history" | "passcode" | "backup";
 type Status = Partial<Record<Key, { text: string; tone?: "ok" | "warn" | "muted" }>>;
 
 const PAGES: Record<Key, { icon: string; color: string; title: string }> = {
   line: { icon: "🔔", color: "#22C55E", title: "แจ้งเตือน LINE" },
   focus: { icon: "⏰", color: "#F97316", title: "เวลาที่สนใจ" },
+  anniversary: { icon: "💍", color: "#EC4899", title: "วันครบรอบแต่งงาน" },
   calendar: { icon: "🗓️", color: "#EF4444", title: "ปฏิทิน SA" },
   mapping: { icon: "🔤", color: "#3B82F6", title: "คำเรียกเวร" },
   history: { icon: "📜", color: "#64748B", title: "ประวัติ" },
@@ -23,7 +25,7 @@ const PAGES: Record<Key, { icon: string; color: string; title: string }> = {
   backup: { icon: "💾", color: "#8B5CF6", title: "สำรองข้อมูล" },
 };
 const GROUPS: { title: string; keys: Key[] }[] = [
-  { title: "การแจ้งเตือน", keys: ["line", "focus"] },
+  { title: "การแจ้งเตือน", keys: ["line", "focus", "anniversary"] },
   { title: "ข้อมูลตาราง", keys: ["calendar", "mapping", "history"] },
   { title: "บัญชี", keys: ["passcode", "backup"] },
 ];
@@ -45,6 +47,8 @@ export default function Settings() {
         const fw = (row.focus_windows ?? []) as { key: string; s: number; e: number }[];
         const w = fw.find(x => x.key === (row.workday_focus_key ?? "after_work"));
         if (w) s.focus = { text: `${minToTime(w.s)}–${minToTime(w.e)}` };
+        s.anniversary = row.anniversary_date
+          ? { text: shortDate(row.anniversary_date).replace(/^\S+\.\s/, "") } : { text: "ยังไม่ตั้ง", tone: "muted" };
       }
       const y = Number(todayBkk().slice(0, 4));
       const { count } = await sb.from("company_calendar").select("calendar_date", { count: "exact", head: true }).eq("source_year", y);
@@ -72,6 +76,7 @@ export default function Settings() {
         <section className="card rounded-2xl border border-slate-700 bg-slate-800 p-4">
           {open === "line" && <LineSection />}
           {open === "focus" && <FocusSection />}
+          {open === "anniversary" && <AnniversarySection />}
           {open === "calendar" && <CalendarSection />}
           {open === "mapping" && <MappingSection />}
           {open === "history" && <HistorySection />}
@@ -249,6 +254,39 @@ function FocusSection() {
       <p className="font-semibold">🏖️ วันที่ Benz หยุด</p><Pick v={d} set={setD} />
       {invalid && <p role="alert" className="text-sm text-rose-400">เวลาสิ้นสุดต้องหลังเวลาเริ่ม</p>}
       <PrimaryButton disabled={invalid || saving} onClick={save}>{saving ? "⏳ กำลังคำนวณ..." : "💾 บันทึก"}</PrimaryButton>
+    </div>
+  );
+}
+
+// ---------- 💍 วันครบรอบ ----------
+function AnniversarySection() {
+  const { toast, bump } = useApp();
+  const [val, setVal] = useState<string | null>(null);
+  const [init, setInit] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { loadAnniversary(true).then(v => { setVal(v ?? ""); setInit(v ?? ""); }).catch(() => setVal("")); }, []);
+  if (val === null) return <Spinner />;
+  const invalid = !!val && (!/^\d{4}-\d{2}-\d{2}$/.test(val) || val > todayBkk());
+
+  async function save() {
+    setSaving(true);
+    const { error } = await sb.from("app_settings").update({ anniversary_date: val || null }).eq("id", 1);
+    setSaving(false);
+    if (error) { toast("❌ บันทึกไม่สำเร็จ"); return; }
+    await loadAnniversary(true); setInit(val ?? ""); bump(); toast("บันทึกแล้ว ✅");
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-slate-400">ปฏิทินจะแสดง 💍 และหน้าหลักจะเตือนล่วงหน้า 7 วัน</p>
+      <label className="flex flex-col gap-1">
+        <span className="font-semibold">วันแต่งงาน</span>
+        <input type="date" value={val} max={todayBkk()} onChange={e => setVal(e.target.value)}
+          className="min-h-12 rounded-xl bg-slate-700 px-3" />
+      </label>
+      {val && !invalid && <p className="text-sm font-semibold text-pink-300">💍 {shortDate(val)}</p>}
+      {invalid && <p role="alert" className="text-sm text-rose-400">วันที่ต้องไม่เกินวันนี้</p>}
+      <PrimaryButton disabled={saving || invalid || val === init} onClick={save}>💾 บันทึก</PrimaryButton>
     </div>
   );
 }

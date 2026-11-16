@@ -7,6 +7,8 @@ import { todayBkk, monthRange, dowOf, MONTH_TH, shortDate } from "../lib/dateBkk
 import { LEVEL_ICON, LEVEL_COLOR, durationTh } from "../lib/matching";
 import { useApp, Card, benzLabel, eawLabel } from "../components/ui";
 import PullToRefresh from "../components/PullToRefresh";
+import OfflineBar from "../components/OfflineBar";
+import { saveCache, readCache, useAnniversary, anniversaryYears } from "../lib/special";
 import { CalendarSkeleton } from "../components/Skeleton";
 
 const HEAD = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"];
@@ -15,11 +17,13 @@ const iconSize = (icon: string) => ([...icon].filter(ch => /\p{Extended_Pictogra
 
 export default function Calendar() {
   const { types, profiles, typeMap, version, openDay } = useApp();
+  const ann = useAnniversary(version);
   const t = todayBkk();
   const cur = { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) };
   const [ym, setYm] = useState(cur);
   const [days, setDays] = useState<DayInfo[] | null>(null);
   const [error, setError] = useState("");
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
   const [top, setTop] = useState(64);
   const [dir, setDir] = useState<0 | 1 | -1>(0);
   const touchX = useRef<number | null>(null);
@@ -38,8 +42,12 @@ export default function Calendar() {
   const load = useCallback(() => {
     const [from, to] = monthRange(ym.y, ym.m);
     return loadDays(from, to, types, profiles)
-      .then(d => { setDays(d); setError(""); })
-      .catch(() => setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง"));
+      .then(d => { setDays(d); setError(""); setCachedAt(null); saveCache(`cal_${ym.y}_${ym.m}`, d); })
+      .catch(() => {
+        const c = readCache<DayInfo[]>(`cal_${ym.y}_${ym.m}`);
+        if (c) { setDays(c.data); setCachedAt(c.at); setError(""); }
+        else setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง");
+      });
   }, [ym, types, profiles]);
   useEffect(() => { setDays(null); }, [ym]);
   useEffect(() => { load(); }, [load, version]);
@@ -82,6 +90,7 @@ export default function Calendar() {
         </div>
       </div>
 
+      <OfflineBar cachedAt={cachedAt} />
       {error && <p className="text-center text-rose-400">{error}</p>}
       {!days && !error && <CalendarSkeleton />}
       {days && (
@@ -103,7 +112,9 @@ export default function Calendar() {
                 aria-label={`${shortDate(d.date)} Benz ${b.text} Eaw ${e.text}`}
                 className={`card flex min-h-[86px] min-w-0 flex-col gap-1 rounded-xl border bg-slate-800 p-1 ${isToday ? "border-violet-500 ring-2 ring-violet-500/40" : "border-slate-700"}`}
                 style={{ boxShadow: `inset 0 -3px 0 ${lc}` }}>
-                <span className={`px-0.5 text-left text-xs font-bold ${isToday ? "text-violet-300" : ""}`}>{Number(d.date.slice(8))}</span>
+                <span className={`flex items-center justify-between px-0.5 text-xs font-bold ${isToday ? "text-violet-300" : ""}`}>
+                  {Number(d.date.slice(8))}{anniversaryYears(d.date, ann) && <span className="text-[11px]" title="วันครบรอบ">💍</span>}
+                </span>
                 <span className="flex h-5 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md leading-none" style={{ background: b.color + "33" }}>
                   <span className={iconSize(b.icon)} aria-hidden>{b.icon}</span>
                   <span className="hidden truncate text-[11px] text-slate-200 md:inline">{b.text}</span>

@@ -11,6 +11,7 @@ import {
   DEFAULT_SETTINGS, type Settings, type BenzDay,
 } from "../lib/matching";
 import { SheetSkeleton } from "./Skeleton";
+import { useOnline, useAnniversary, anniversaryYears } from "../lib/special";
 import { useApp, TimeBar, TimeScale, PrimaryButton, benzLabel, Row, timeOptions, C } from "./ui";
 
 type OtMode = "none" | "unknown" | "time";
@@ -19,6 +20,9 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   const { me, profiles, types, typeMap, toast, version } = useApp();
   const eawId = profiles.find(p => p.role === "wannika")?.id ?? "";
   const isBenz = me.role === "bulakorn";
+  const online = useOnline();
+  const ann = useAnniversary(version);
+  const annYears = anniversaryYears(date, ann);
 
   const [day, setDay] = useState<DayInfo | null>(null);
   const [st, setSt] = useState<Settings>(DEFAULT_SETTINGS);
@@ -100,6 +104,7 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
 
   async function save() {
     if (!day || otInvalid || !dirty) return;
+    if (!navigator.onLine) { toast("📶 ออฟไลน์อยู่ บันทึกไม่ได้"); return; }
     setSaving(true);
     try {
       // 1) OT (เฉพาะ Benz, ไม่แตะวันที่มาจาก QE Tracker)
@@ -151,6 +156,24 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
     }
   }
 
+  // 💬 แชร์สรุปวันนี้ (Web Share → ถ้าไม่รองรับ เปิด LINE share)
+  async function share() {
+    if (!day || !r) return;
+    const b = benzLabel(day);
+    const e = typeMap.get(code);
+    const text = [
+      `📅 ${thaiDate(date, true)}${annYears ? ` 💍 ครบรอบ ${annYears} ปี` : ""}`,
+      `👨‍💼 Benz: ${b.icon} ${b.text}`,
+      `🏥 Eaw: ${e ? `${e.icon} ${e.label_th}` : "ยังไม่มีเวร"}`,
+      `${LEVEL_ICON[r.level]} ${windowsText(r)}`,
+      suggestion(r),
+    ].join("\n");
+    try {
+      if (navigator.share) { await navigator.share({ text }); return; }
+    } catch (err) { if ((err as Error)?.name === "AbortError") return; }
+    window.open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+  }
+
   const otherNotes = day?.notes.filter(n => n.user_id !== me.id) ?? [];
   const r = preview;
 
@@ -167,12 +190,18 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
         <div className="-mt-2 flex justify-center py-2" aria-hidden><span className="h-1.5 w-10 rounded-full bg-slate-600" /></div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-extrabold">{thaiDate(date, true)}</h2>
-          <button type="button" onClick={close} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="ปิด">✕</button>
+          <div className="flex gap-2">
+            {r && <button type="button" onClick={share} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="แชร์ไป LINE">💬</button>}
+            <button type="button" onClick={close} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="ปิด">✕</button>
+          </div>
         </div>
         {error && <p className="text-rose-400">{error}</p>}
         {!day && !error && <SheetSkeleton />}
         {day && r && (
           <div className="flex flex-col gap-3">
+            {annYears && (
+              <p className="rounded-2xl bg-gradient-to-r from-pink-500/25 to-violet-500/25 px-3 py-2 font-extrabold">💍 ครบรอบแต่งงาน {annYears} ปี 🎉</p>
+            )}
             <div className="rounded-2xl p-3" style={{ background: LEVEL_COLOR[r.level] + "1f" }}>
               <p className="text-lg font-extrabold" style={{ color: LEVEL_COLOR[r.level] }} aria-live="polite">
                 {LEVEL_ICON[r.level]} {windowsText(r)}
@@ -254,8 +283,8 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
                 className="min-h-12 rounded-xl border border-slate-700 bg-slate-800 px-3" />
             </label>
 
-            <PrimaryButton disabled={!dirty || saving || otInvalid} onClick={save}>
-              {saving ? "⏳ กำลังบันทึก..." : "💾 บันทึก"}
+            <PrimaryButton disabled={!dirty || saving || otInvalid || !online} onClick={save}>
+              {!online ? "📶 ออฟไลน์ · บันทึกไม่ได้" : saving ? "⏳ กำลังบันทึก..." : "💾 บันทึก"}
             </PrimaryButton>
           </div>
         )}

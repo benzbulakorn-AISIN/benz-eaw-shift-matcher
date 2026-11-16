@@ -5,6 +5,8 @@ import { LEVEL_ICON, LEVEL_COLOR, suggestion, durationTh, minToTime, type MatchR
 import { useApp, Card, Row, TimeBar, TimeScale, benzLabel, eawLabel, C } from "../components/ui";
 import TodayTimeline from "../components/TodayTimeline";
 import PullToRefresh from "../components/PullToRefresh";
+import OfflineBar from "../components/OfflineBar";
+import { saveCache, readCache, useAnniversary, daysToAnniversary } from "../lib/special";
 import { HomeSkeleton } from "../components/Skeleton";
 
 const LEVEL_TEXT: Record<string, string> = {
@@ -16,8 +18,10 @@ const shortHrs = (r: MatchResult) =>
 
 export default function Home() {
   const { types, profiles, typeMap, version, openDay, goTab } = useApp();
+  const ann = useAnniversary(version);
   const [days, setDays] = useState<DayInfo[] | null>(null);
   const [error, setError] = useState("");
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
   const [today, setToday] = useState(todayBkk());
 
   // ข้ามเที่ยงคืน → โหลดวันใหม่อัตโนมัติ
@@ -28,8 +32,13 @@ export default function Home() {
 
   const load = useCallback(() =>
     loadDays(today, addDays(today, 8), types, profiles)
-      .then(d => { setDays(d); setError(""); })
-      .catch(() => setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง")),
+      .then(d => { setDays(d); setError(""); setCachedAt(null); saveCache(`home_${today}`, d); })
+      .catch(() => {
+        // โหลดไม่ได้ (ออฟไลน์) → ใช้ข้อมูลล่าสุดที่เก็บไว้
+        const c = readCache<DayInfo[]>(`home_${today}`);
+        if (c) { setDays(c.data); setCachedAt(c.at); setError(""); }
+        else setError("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง");
+      }),
   [today, types, profiles]);
   useEffect(() => { load(); }, [load, version]);
 
@@ -51,6 +60,8 @@ export default function Home() {
   return (
     <PullToRefresh onRefresh={load}>
     <div className="fade-in flex flex-col gap-3">
+      <OfflineBar cachedAt={cachedAt} />
+      <AnniversaryBanner today={today} ann={ann} />
       {/* ===== วันนี้: ไทม์ไลน์ + เวลาปัจจุบัน ===== */}
       <TodayTimeline day={todayInfo} />
 
@@ -125,5 +136,17 @@ export default function Home() {
       )}
     </div>
     </PullToRefresh>
+  );
+}
+
+// 💍 แบนเนอร์วันครบรอบ (แสดงตั้งแต่ 7 วันก่อนถึงวันจริง)
+function AnniversaryBanner({ today, ann }: { today: string; ann: string | null }) {
+  const a = daysToAnniversary(today, ann);
+  if (!a || a.days > 7) return null;
+  return (
+    <div className="card fade-in overflow-hidden rounded-2xl border border-pink-400/50 bg-gradient-to-r from-pink-500/20 via-fuchsia-500/15 to-violet-500/20 px-4 py-3">
+      <p className="text-lg font-extrabold">💍 {a.days === 0 ? `สุขสันต์วันครบรอบแต่งงาน ${a.years} ปี 🎉` : a.days === 1 ? `พรุ่งนี้ครบรอบแต่งงาน ${a.years} ปี` : `อีก ${a.days} วัน ครบรอบแต่งงาน ${a.years} ปี`}</p>
+      <p className="text-sm font-semibold text-slate-300">{a.days === 0 ? "Happy Wedding Anniversary 💕" : "อย่าลืมวางแผนวันพิเศษนะ 💕"}</p>
+    </div>
   );
 }
