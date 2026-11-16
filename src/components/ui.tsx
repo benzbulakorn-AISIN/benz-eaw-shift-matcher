@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import type { Profile, ShiftType, DayInfo } from "../lib/data";
 import { minToTime, WORKING, type Seg } from "../lib/matching";
 
@@ -45,6 +45,10 @@ export type Label = { icon: string; text: string; color: string };
 
 export function benzLabel(d: DayInfo): Label {
   if (!d.dayType) return { icon: "❔", text: "ไม่มีปฏิทิน", color: C.none };
+  if (d.qe === "leave") return { icon: "💗", text: "ลา (QE)", color: C.leave };
+  if (d.qe === "partial" && d.ot) {
+    return { icon: "🕐", text: `ทำงาน ${minToTime(d.ot.start)}–${d.ot.end === null ? "?" : minToTime(d.ot.end)} (ลาบางช่วง)`, color: C.leave };
+  }
   if (WORKING.includes(d.dayType)) {
     if (!d.ot) return { icon: "💼", text: "07:30–16:30", color: C.work };
     return { icon: "⏱️", text: d.ot.end === null ? "OT (ประมาณ 20:00)" : `OT ถึง ${minToTime(d.ot.end)}`, color: C.ot };
@@ -63,16 +67,16 @@ export function eawLabel(d: DayInfo, typeMap: Map<string, ShiftType>): Label {
 }
 
 // ---------- Components ----------
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-2xl bg-slate-800/90 border border-slate-700 p-4 ${className}`}>{children}</section>;
+export function Card({ children, className = "", style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
+  return <section style={style} className={`card fade-in rounded-2xl border border-slate-700 bg-slate-800 p-4 ${className}`}>{children}</section>;
 }
 
 export function Row({ who, label }: { who: string; label: Label }) {
   return (
-    <div className="flex items-center gap-2 py-1 min-w-0">
+    <div className="flex min-w-0 items-center gap-2 py-1">
       <span className="w-12 shrink-0 text-sm text-slate-400">{who}</span>
-      <span className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-semibold min-w-0"
-        style={{ background: label.color + "33", color: "#F1F5F9", borderLeft: `4px solid ${label.color}` }}>
+      <span className="inline-flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-semibold text-slate-100"
+        style={{ background: label.color + "26", boxShadow: `inset 3px 0 0 ${label.color}` }}>
         <span aria-hidden>{label.icon}</span><span className="truncate">{label.text}</span>
       </span>
     </div>
@@ -83,7 +87,7 @@ export function PrimaryButton({ children, disabled, onClick, type = "button" }:
   { children: ReactNode; disabled?: boolean; onClick?: () => void; type?: "button" | "submit" }) {
   return (
     <button type={type} disabled={disabled} onClick={onClick}
-      className="w-full min-h-12 rounded-xl bg-violet-600 px-4 py-3 text-base font-bold text-white disabled:bg-slate-600 disabled:text-slate-300 active:scale-[.99]">
+      className="w-full min-h-12 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-3 text-base font-bold text-white shadow-md shadow-violet-900/20 disabled:from-slate-600 disabled:to-slate-600 disabled:text-slate-300 disabled:shadow-none">
       {children}
     </button>
   );
@@ -94,11 +98,11 @@ export function TimeBar({ label, segs, color }: { label: string; segs: Seg[]; co
   return (
     <div className="flex items-center gap-2">
       <span className="w-12 shrink-0 text-xs text-slate-400">{label}</span>
-      <div className="relative h-5 flex-1 rounded bg-slate-700/60 overflow-hidden" aria-label={`${label} ${segText(segs) || "ไม่มี"}`}>
+      <div className="relative h-4 flex-1 overflow-hidden rounded-full bg-slate-700" aria-label={`${label} ${segText(segs) || "ไม่มี"}`}>
         {segs.map((x, i) => (
-          <div key={i} className="absolute inset-y-0" style={{ left: `${(x.s / 1440) * 100}%`, width: `${((x.e - x.s) / 1440) * 100}%`, background: color }} />
+          <div key={i} className="absolute inset-y-0 rounded-full" style={{ left: `${(x.s / 1440) * 100}%`, width: `${((x.e - x.s) / 1440) * 100}%`, background: color }} />
         ))}
-        {[6, 12, 18].map(h => <div key={h} className="absolute inset-y-0 w-px bg-slate-500/50" style={{ left: `${(h / 24) * 100}%` }} />)}
+        {[6, 12, 18].map(h => <div key={h} className="absolute inset-y-0 w-px bg-slate-500/40" style={{ left: `${(h / 24) * 100}%` }} />)}
       </div>
     </div>
   );
@@ -114,10 +118,14 @@ export function TimeScale() {
 }
 
 export function Spinner({ text = "กำลังโหลด..." }: { text?: string }) {
-  return <p className="py-8 text-center text-slate-400" role="status">⏳ {text}</p>;
+  return (
+    <div className="flex flex-col items-center gap-3 py-10 text-slate-400" role="status">
+      <span className="h-8 w-8 animate-spin rounded-full border-4 border-slate-700 border-t-violet-500" aria-hidden />
+      {text}
+    </div>
+  );
 }
 
-// ตัวเลือกเวลา 30 นาที
 export function timeOptions(from: number, to: number) {
   const out: number[] = [];
   for (let m = from; m <= to; m += 30) out.push(m);

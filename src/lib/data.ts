@@ -1,4 +1,4 @@
-// โหลดข้อมูล / คำนวณ Matching / สรุปเดือน / เปรียบเทียบ OCR / เตรียมรูป  (v2)
+// โหลดข้อมูล / คำนวณ Matching / สรุปเดือน / เปรียบเทียบ OCR / เตรียมรูป  (v3: รู้จักวันลาจาก QE Tracker)
 import { sb } from "./supabase";
 import {
   matchDay, timeToMin, minToTime, DEFAULT_SETTINGS, WORKING,
@@ -15,6 +15,8 @@ export type ShiftType = {
 export type DayInfo = {
   date: string;
   dayType: DayType | null;
+  /** ข้อมูลจาก QE Tracker: leave = ลาทั้งวัน, partial = ลาบางช่วง */
+  qe: "leave" | "partial" | null;
   ot: { start: number; end: number | null; note: string | null } | null;
   shift: { code: string; segments: Seg[]; leaveIsFree: boolean | null; note: string | null } | null;
   nextEaw: EawDay;
@@ -64,7 +66,7 @@ export async function loadDays(from: string, to: string, types: ShiftType[], pro
   const until = addDays(to, 1);
   const [row, cal, ot, sh, notes] = await Promise.all([
     loadSettingsRow().catch(() => null),
-    sb.from("company_calendar").select("calendar_date, day_type").gte("calendar_date", from).lte("calendar_date", to),
+    sb.from("company_calendar").select("calendar_date, day_type, base_day_type").gte("calendar_date", from).lte("calendar_date", to),
     sb.from("overtime").select("work_date, start_time, end_time, note").gte("work_date", from).lte("work_date", to),
     sb.from("shifts").select("shift_date, shift_type, busy_segments, leave_is_free, note")
       .eq("user_id", eawId).gte("shift_date", from).lte("shift_date", until),
@@ -74,7 +76,7 @@ export async function loadDays(from: string, to: string, types: ShiftType[], pro
 
   const st = settingsFromRow(row);
   const leave = new Set(types.filter(t => t.is_leave).map(t => t.code));
-  const calMap = new Map((cal.data ?? []).map((c: any) => [c.calendar_date, c.day_type as DayType]));
+  const calMap = new Map((cal.data ?? []).map((c: any) => [c.calendar_date, c]));
   const otMap = new Map((ot.data ?? []).map((o: any) => [o.work_date, o]));
   const shMap = new Map((sh.data ?? []).map((s: any) => [s.shift_date, s]));
   const noteRows = (notes.error ? [] : notes.data ?? []) as { note_date: string; user_id: string; note: string }[];
@@ -86,16 +88,22 @@ export async function loadDays(from: string, to: string, types: ShiftType[], pro
 
   const out: DayInfo[] = [];
   for (let d = from; d <= to; d = addDays(d, 1)) {
+    const c: any = calMap.get(d);
     const o: any = otMap.get(d);
     const s: any = shMap.get(d);
+    const dayType = (c?.day_type ?? null) as DayType | null;
+    const base = (c?.base_day_type ?? null) as DayType | null;
+    const qeOverride = !!base && base !== dayType && !!dayType && !WORKING.includes(dayType) && WORKING.includes(base);
+    const qe = qeOverride ? (o?.note === "QE:auto" ? "partial" : "leave") : null;
     const benz: BenzDay = {
-      dayType: calMap.get(d) ?? null,
+      dayType,
       ot: o ? { start: timeToMin(o.start_time) ?? st.workEnd, end: timeToMin(o.end_time) } : null,
     };
     const nextEaw = eawOf(addDays(d, 1));
     out.push({
       date: d,
-      dayType: benz.dayType,
+      dayType,
+      qe,
       ot: o ? { start: benz.ot!.start, end: benz.ot!.end, note: o.note ?? null } : null,
       shift: s ? { code: s.shift_type, segments: s.busy_segments ?? [], leaveIsFree: s.leave_is_free, note: s.note ?? null } : null,
       nextEaw,
@@ -145,7 +153,8 @@ export function monthlySummary(days: DayInfo[]) {
     freeEvenings: days.filter(d => evening(d.result) >= 120).length,
     bothOffFullDay: days.filter(d => d.result.level !== "incomplete" && !d.result.benzWorking
       && d.result.benzBusy.length === 0 && d.result.eawBusy.length === 0).length,
-    otDays: days.filter(d => d.ot).length,
+    otDays: days.filter(d => d.ot && d.ot.note !== "QE:auto").length,
+    leaveDays: days.filter(d => d.qe).length,
     shiftCounts,
     bestDays: days.filter(d => d.result.totalMinutes > 0)
       .sort((a, b) => b.result.totalMinutes - a.result.totalMinutes || a.date.localeCompare(b.date))
@@ -166,7 +175,6 @@ export function diffShifts(draft: DraftDay[], existing: { shift_date: string; sh
   const old = new Map(existing.map(e => [e.shift_date, e.shift_type]));
   return draft.map(d => {
     const prev = old.get(d.date) ?? null;
-    // วันที่ไม่อยู่ในรูป แต่มีข้อมูลเดิม → คงค่าเดิมไว้ (ไม่เดา)
     if (d.reason === "ไม่พบวันนี้ในรูป" && prev) {
       return { ...d, shift_type: prev, needs_review: false, reason: null, old: prev, kind: "same" as const };
     }
@@ -200,7 +208,6 @@ export async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> 
   }
 }
 
-// อัปโหลดรูป + สร้าง schedule_imports + เรียก OCR
 export async function uploadAndOcr(
   file: File, uid: string, kind: "shift" | "company_calendar",
   onStep: (msg: string) => void,
@@ -229,7 +236,6 @@ export async function uploadAndOcr(
   try {
     draft = await invokeOcr(imp.id);
   } catch (e) {
-    // ปลดล็อกรูปนี้ เพื่อให้เลือกรูปเดิมลองใหม่ได้
     await sb.from("schedule_imports")
       .update({ import_status: "failed", error_message: String((e as Error).message ?? "").slice(0, 100) })
       .eq("id", imp.id).in("import_status", ["uploaded", "ocr_done"]);
@@ -239,7 +245,6 @@ export async function uploadAndOcr(
 }
 
 export async function invokeOcr(importId: string) {
-  // ไม่เรียกซ้ำอัตโนมัติ (การอ่านรูปใช้เวลานาน) + ตัดการรอที่ 140 วินาที เพื่อไม่ให้หน้าจอค้าง
   const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("OCR_TIMEOUT")), 140_000));
   const { data, error } = await Promise.race([sb.functions.invoke("ocr-import", { body: { importId } }), timeout]);
   if (error) {
