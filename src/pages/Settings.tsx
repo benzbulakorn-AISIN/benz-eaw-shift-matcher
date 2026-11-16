@@ -8,7 +8,7 @@ import { MONTH_SHORT, MONTH_TH, daysInMonth, isoOf, shortDate, todayBkk } from "
 import { minToTime } from "../lib/matching";
 import { useApp, PrimaryButton, Spinner, DAY_TYPE_LABEL, timeOptions } from "../components/ui";
 import ReviewGrid, { type ReviewCell } from "../components/ReviewGrid";
-import ChangePasscode from "../components/ChangePasscode";
+import SpecialEvents from "../components/SpecialEvents";
 import { loadAnniversary } from "../lib/special";
 
 type Key = "line" | "focus" | "anniversary" | "calendar" | "mapping" | "history" | "passcode" | "backup";
@@ -17,7 +17,7 @@ type Status = Partial<Record<Key, { text: string; tone?: "ok" | "warn" | "muted"
 const PAGES: Record<Key, { icon: string; color: string; title: string }> = {
   line: { icon: "🔔", color: "#22C55E", title: "แจ้งเตือน LINE" },
   focus: { icon: "⏰", color: "#F97316", title: "เวลาที่สนใจ" },
-  anniversary: { icon: "💍", color: "#EC4899", title: "วันครบรอบแต่งงาน" },
+  anniversary: { icon: "🎉", color: "#EC4899", title: "วันพิเศษ" },
   calendar: { icon: "🗓️", color: "#EF4444", title: "ปฏิทิน SA" },
   mapping: { icon: "🔤", color: "#3B82F6", title: "คำเรียกเวร" },
   history: { icon: "📜", color: "#64748B", title: "ประวัติ" },
@@ -76,7 +76,7 @@ export default function Settings() {
         <section className="card rounded-2xl border border-slate-700 bg-slate-800 p-4">
           {open === "line" && <LineSection />}
           {open === "focus" && <FocusSection />}
-          {open === "anniversary" && <AnniversarySection />}
+          {open === "anniversary" && <SpecialEvents />}
           {open === "calendar" && <CalendarSection />}
           {open === "mapping" && <MappingSection />}
           {open === "history" && <HistorySection />}
