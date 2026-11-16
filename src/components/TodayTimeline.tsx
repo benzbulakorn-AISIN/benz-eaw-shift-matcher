@@ -1,4 +1,5 @@
-// 🕐 ไทม์ไลน์วันนี้ + เส้นเวลาปัจจุบัน + นับถอยหลัง (อัปเดตทุก 30 วินาที)
+// 🕐 ไทม์ไลน์วันนี้ (v2) + เส้นเวลาปัจจุบัน + นับถอยหลัง (อัปเดตทุก 30 วินาที)
+// v2: ป้ายเวลาปัจจุบันบนจุดของเส้นแดง · สเกลเวลาทุก 2 ชั่วโมง (00, 02, 04 … 24)
 import { useEffect, useState } from "react";
 import type { DayInfo } from "../lib/data";
 import { minToTime, LEVEL_ICON, LEVEL_COLOR, type Seg } from "../lib/matching";
@@ -18,12 +19,25 @@ export function dur(min: number): string {
   return [h ? `${h} ชม.` : "", m ? `${m} นาที` : ""].filter(Boolean).join(" ");
 }
 
-// สถานะของคน ณ ตอนนี้ จากช่วงไม่ว่าง
+const HOURS = Array.from({ length: 13 }, (_, i) => i * 2);   // 0, 2, 4 … 24
+const pctOf = (min: number) => (min / 1440) * 100;
+
 function personNow(busy: Seg[], now: number): { busy: boolean; text: string } {
   const cur = busy.find(s => now >= s.s && now < s.e);
   if (cur) return { busy: true, text: cur.e >= 1440 ? "ไม่ว่างถึงเที่ยงคืน" : `ว่างอีก ${dur(cur.e - now)} (${minToTime(cur.e)})` };
   const next = busy.filter(s => s.s > now).sort((a, b) => a.s - b.s)[0];
   return { busy: false, text: next ? `ว่างอยู่ · ติดธุระอีก ${dur(next.s - now)} (${minToTime(next.s)})` : "ว่างถึงสิ้นวัน" };
+}
+
+// เส้นแนวตั้งทุก 2 ชม. (เส้นทุก 6 ชม. เข้มกว่า)
+function Grid() {
+  return (
+    <>
+      {HOURS.slice(1, -1).map(h => (
+        <div key={h} className={`absolute inset-y-0 w-px ${h % 6 === 0 ? "bg-slate-500/50" : "bg-slate-500/20"}`} style={{ left: `${pctOf(h * 60)}%` }} />
+      ))}
+    </>
+  );
 }
 
 function Track({ label, segs, color, now }: { label: string; segs: Seg[]; color: string; now: number }) {
@@ -33,9 +47,9 @@ function Track({ label, segs, color, now }: { label: string; segs: Seg[]; color:
       <div className="relative h-5 flex-1 overflow-hidden rounded-full bg-slate-700">
         {segs.map((x, i) => (
           <div key={i} className="absolute inset-y-0 rounded-full"
-            style={{ left: `${(x.s / 1440) * 100}%`, width: `${((x.e - x.s) / 1440) * 100}%`, background: color, opacity: x.e <= now ? 0.35 : 1 }} />
+            style={{ left: `${pctOf(x.s)}%`, width: `${pctOf(x.e - x.s)}%`, background: color, opacity: x.e <= now ? 0.35 : 1 }} />
         ))}
-        {[6, 12, 18].map(h => <div key={h} className="absolute inset-y-0 w-px bg-slate-500/40" style={{ left: `${(h / 24) * 100}%` }} />)}
+        <Grid />
       </div>
     </div>
   );
@@ -54,9 +68,10 @@ export default function TodayTimeline({ day }: { day: DayInfo }) {
   const r = day.result;
   const color = LEVEL_COLOR[r.level];
   const eawColor = typeMap.get(day.shift?.code ?? "")?.color ?? C.none;
-  const pct = (now / 1440) * 100;
+  const pct = pctOf(now);
+  // ป้ายเวลาไม่ให้ล้นขอบซ้าย/ขวา
+  const labelShift = pct < 8 ? "0%" : pct > 92 ? "-100%" : "-50%";
 
-  // ข้อความหลัก
   let head: { icon: string; text: string; sub: string; tone: string };
   if (r.level === "incomplete") {
     head = { icon: "⚪", text: "ข้อมูลไม่ครบ", sub: r.missingReason ?? "", tone: C.none };
@@ -79,25 +94,39 @@ export default function TodayTimeline({ day }: { day: DayInfo }) {
           <p className="text-sm font-semibold text-slate-400">วันนี้ · {shortDate(day.date)}</p>
           <span className="rounded-full bg-slate-700 px-2.5 py-0.5 text-xs font-bold tabular-nums">🕐 {minToTime(now)}</span>
         </div>
-        <div className="px-4 pb-2 pt-1" aria-live="polite">
+        <div className="px-4 pb-1 pt-1" aria-live="polite">
           <p className="text-lg font-extrabold" style={{ color: head.tone }}>{head.icon} {head.text}</p>
           <p className="text-sm font-semibold text-slate-400">{head.sub}</p>
         </div>
 
-        {/* ไทม์ไลน์ + เส้นตอนนี้ */}
-        <div className="relative flex flex-col gap-1.5 px-4 pb-2 pt-3">
+        {/* ไทม์ไลน์ + เส้นตอนนี้ (pt-9 เผื่อพื้นที่ป้ายเวลา) */}
+        <div className="relative flex flex-col gap-1.5 px-4 pb-2 pt-9">
           <Track label="Benz" segs={r.benzBusy} color={C.work} now={now} />
           <Track label="Eaw" segs={r.eawBusy} color={eawColor} now={now} />
           <Track label="ว่างร่วม" segs={r.windows} color={C.free} now={now} />
-          <div className="flex items-center gap-2 text-[10px] text-slate-500">
+
+          {/* สเกลทุก 2 ชม. */}
+          <div className="flex items-center gap-2">
             <span className="w-12 shrink-0" />
-            <div className="flex flex-1 justify-between"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
-          </div>
-          {/* เส้นเวลาปัจจุบัน (คอลัมน์ป้ายกว้าง 3rem + gap 0.5rem) */}
-          <div className="pointer-events-none absolute bottom-6 top-1 left-[calc(1rem+3.5rem)] right-4">
-            <div className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded bg-rose-500" style={{ left: `${pct}%` }}>
-              <span className="absolute -top-1 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rounded-full bg-rose-500 ring-2 ring-slate-800" />
+            <div className="relative h-4 flex-1 text-[9px] tabular-nums text-slate-500 sm:text-[11px]">
+              {HOURS.map(h => (
+                <span key={h} className="absolute top-0 -translate-x-1/2 whitespace-nowrap"
+                  style={{ left: `${pctOf(h * 60)}%`, transform: h === 0 ? "none" : h === 24 ? "translateX(-100%)" : undefined }}>
+                  {String(h).padStart(2, "0")}<span className="hidden sm:inline">:00</span>
+                </span>
+              ))}
             </div>
+          </div>
+
+          {/* เส้นเวลาปัจจุบัน + ป้ายเวลา (คอลัมน์ป้ายกว้าง 3rem + gap 0.5rem) */}
+          <div className="pointer-events-none absolute bottom-7 top-2 left-[calc(1rem+3.5rem)] right-4">
+            <div className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded bg-rose-500" style={{ left: `${pct}%` }}>
+              <span className="absolute left-1/2 top-[22px] h-2.5 w-2.5 -translate-x-1/2 rounded-full bg-rose-500 ring-2 ring-slate-800" />
+            </div>
+            <span className="absolute top-0 whitespace-nowrap rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-extrabold tabular-nums text-white shadow"
+              style={{ left: `${pct}%`, transform: `translateX(${labelShift})` }}>
+              {minToTime(now)} น.
+            </span>
           </div>
         </div>
 
