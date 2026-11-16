@@ -1,4 +1,5 @@
-// 📤 อัปโหลดเวร: เลือกรูป → อ่าน → ตรวจเฉพาะวันที่เปลี่ยน → ✅ ตรวจสอบและบันทึก → ลบ/เก็บรูป
+// 📤 อัปโหลดเวร (v2): ทั้ง Eaw และ Benz ใช้หน้าจอเดียวกัน — ข้อมูลบันทึกเป็นเวรของ Eaw เสมอ
+// เลือกรูป → อ่าน → ตรวจเฉพาะวันที่เปลี่ยน → ✅ ตรวจสอบและบันทึก → ลบ/เก็บรูป
 import { useEffect, useMemo, useState } from "react";
 import { sb } from "../lib/supabase";
 import {
@@ -10,23 +11,36 @@ import ReviewGrid, { type ReviewCell } from "../components/ReviewGrid";
 
 type Phase = "pick" | "busy" | "needMonth" | "review" | "done";
 type Review = { importId: string; imagePath: string | null; year: number; month: number; rows: DiffRow[]; warnings: string[] };
+type LastImport = { month: number | null; year: number | null; user_id: string; imported_at: string | null; created_at: string };
+
+const fmtDay = (iso: string) =>
+  new Date(iso).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" });
 
 export default function Upload() {
-  const { me } = useApp();
-  return me.role === "wannika" ? <EawUpload /> : <UploadHistory />;
-}
+  const { me, types, typeMap, profiles, toast, bump, version } = useApp();
+  const eaw = profiles.find(p => p.role === "wannika");
+  const eawId = eaw?.id ?? "";
+  const isProxy = me.role === "bulakorn";
+  const nameOf = (id: string) => (profiles.find(p => p.id === id)?.role === "bulakorn" ? "Benz" : "Eaw");
 
-function EawUpload() {
-  const { me, types, typeMap, profiles, toast, bump } = useApp();
   const [phase, setPhase] = useState<Phase>("busy");
   const [step, setStep] = useState("กำลังตรวจงานค้าง...");
   const [error, setError] = useState("");
   const [rv, setRv] = useState<Review | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [last, setLast] = useState<LastImport | null | undefined>(undefined);
   const t = todayBkk();
   const [pickYm, setPickYm] = useState({ y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) });
 
-  // ทำต่อจากงานที่ค้าง (เช่น เน็ตหลุด)
+  // อัปโหลดล่าสุด (ของใครก็ได้)
+  useEffect(() => {
+    sb.from("schedule_imports").select("month, year, user_id, imported_at, created_at")
+      .eq("kind", "shift").eq("import_status", "saved")
+      .order("imported_at", { ascending: false, nullsFirst: false }).limit(1)
+      .then(({ data }) => setLast((data?.[0] as LastImport) ?? null), () => setLast(null));
+  }, [version]);
+
+  // ทำต่อจากงานที่ค้างของคนที่ล็อกอินอยู่ (เช่น เน็ตหลุด)
   useEffect(() => {
     sb.from("schedule_imports").select("id, image_path, draft_payload, month, year")
       .eq("user_id", me.id).eq("kind", "shift").eq("import_status", "reviewing")
@@ -46,7 +60,7 @@ function EawUpload() {
     }
     const [from, to] = monthRange(draft.year, draft.month);
     const { data: existing } = await sb.from("shifts").select("shift_date, shift_type")
-      .eq("user_id", me.id).gte("shift_date", from).lte("shift_date", to);
+      .eq("user_id", eawId).gte("shift_date", from).lte("shift_date", to);
     setRv({ importId, imagePath, year: draft.year, month: draft.month,
       rows: diffShifts(draft.days as DraftDay[], existing ?? []), warnings: draft.warnings ?? [] });
     setPhase("review");
@@ -54,9 +68,11 @@ function EawUpload() {
 
   async function onFile(file: File | undefined) {
     if (!file) return;
+    if (!eawId) { setError("ไม่พบบัญชีของ Eaw"); return; }
     setError(""); setPhase("busy");
     try {
       const res = await uploadAndOcr(file, me.id, "shift", setStep);
+      await sb.from("schedule_imports").update({ target_user_id: eawId }).eq("id", res.importId);
       const { data: row } = await sb.from("schedule_imports").select("image_path").eq("id", res.importId).single();
       await openReview(res.importId, row?.image_path ?? null, res.draft);
     } catch (e) {
@@ -109,14 +125,16 @@ function EawUpload() {
     setPhase("busy"); setStep("กำลังบันทึก...");
     try {
       const rows = rv.rows.map(r => ({ date: r.date, shift_type: r.shift_type, confidence: r.confidence, raw_text: r.raw_text }));
-      const { error } = await sb.rpc("save_shift_import", { p_import_id: rv.importId, p_rows: rows });
+      const { error } = await sb.rpc("save_shift_import", { p_import_id: rv.importId, p_rows: rows, p_target_user: eawId });
       if (error) throw new Error(error.message);
       const [from, to] = monthRange(rv.year, rv.month);
       await recompute(addDays(from, -1), to, types, profiles);
       bump();
       setPhase("done");
     } catch (e) {
-      setError(errorText(e)); setPhase("review");
+      const m = (e as Error).message;
+      setError(/NOT_ALLOWED|INVALID_TARGET|row-level security/i.test(m) ? "🔒 ยังไม่มีสิทธิ์อัปโหลดแทน (รัน SQL 011 ก่อน)" : errorText(e));
+      setPhase("review");
     }
   }
 
@@ -136,18 +154,32 @@ function EawUpload() {
 
   return (
     <div className="flex flex-col gap-3">
-      {error && <p role="alert" className="rounded-xl bg-rose-500/15 px-4 py-3 font-semibold text-rose-300">{error}</p>}
+      {isProxy && (
+        <div className="flex items-center gap-2 rounded-2xl border border-violet-500/50 bg-violet-600/15 px-4 py-2.5 text-sm font-semibold text-violet-200">
+          <span aria-hidden>📤</span> อัปโหลดแทน Eaw · บันทึกเป็นเวรของ Eaw
+        </div>
+      )}
+
+      {error && <p role="alert" className="rounded-2xl bg-rose-500/15 px-4 py-3 font-semibold text-rose-300">{error}</p>}
 
       {phase === "busy" && <Spinner text={step} />}
 
       {phase === "pick" && (
         <Card className="flex flex-col items-center gap-4 text-center">
-          <p className="text-lg font-bold">📷 อัปโหลดตารางเวร</p>
-          <p className="text-sm text-slate-400">แคปหน้าจอแอปตารางเวรให้เห็นหัวเดือนและแถว Eaw ครบทั้งเดือน</p>
-          <label className="flex min-h-14 w-full cursor-pointer items-center justify-center rounded-xl bg-violet-600 px-4 text-lg font-bold">
+          <span className="flex h-16 w-16 items-center justify-center rounded-full bg-violet-600/20 text-3xl" aria-hidden>📷</span>
+          <div>
+            <p className="text-lg font-extrabold">อัปโหลดตารางเวรของ Eaw</p>
+            <p className="mt-1 text-sm text-slate-400">แคปหน้าจอแอปตารางเวรให้เห็นหัวเดือนและแถว Eaw ครบทั้งเดือน</p>
+          </div>
+          <label className="flex min-h-14 w-full cursor-pointer items-center justify-center rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 text-lg font-bold text-white shadow-md">
             📷 เลือกรูปตารางเวร
             <input type="file" accept="image/*" className="sr-only" onChange={e => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
           </label>
+          <p className="text-sm text-slate-400">
+            {last === undefined ? "…"
+              : last ? <>🕐 อัปโหลดล่าสุด: <b className="text-slate-200">{last.month ? `${MONTH_SHORT[last.month - 1]} ${(last.year ?? 0) + 543}` : "—"}</b> โดย <b className="text-slate-200">{nameOf(last.user_id)}</b> · {fmtDay(last.imported_at ?? last.created_at)}</>
+              : "ยังไม่เคยอัปโหลด"}
+          </p>
         </Card>
       )}
 
@@ -170,7 +202,7 @@ function EawUpload() {
       {phase === "review" && rv && (
         <>
           <Card>
-            <p className="text-lg font-bold">{MONTH_TH[rv.month - 1]} {rv.year + 543}</p>
+            <p className="text-lg font-extrabold">{MONTH_TH[rv.month - 1]} {rv.year + 543}</p>
             <p className="text-sm">🔄 เปลี่ยน {changed} วัน · {pending ? <span className="font-bold text-orange-300">⚠️ ต้องตรวจ {pending} วัน</span> : "✅ ตรวจครบแล้ว"}</p>
             {rv.warnings.map(w => <p key={w} className="text-sm text-amber-300">{w}</p>)}
             {changed === 0 && pending === 0 && <p className="mt-1 text-sm text-emerald-300">✅ ตารางตรงกับข้อมูลเดิมทั้งหมด</p>}
@@ -187,46 +219,14 @@ function EawUpload() {
 
       {phase === "done" && (
         <Card className="flex flex-col gap-3 text-center">
-          <p className="text-lg font-bold">✅ บันทึกแล้ว</p>
+          <p className="text-lg font-extrabold">✅ บันทึกเวรของ Eaw แล้ว</p>
           <p className="text-sm text-slate-400">รูปต้นฉบับจะทำอย่างไร</p>
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => finish(false)} className="min-h-14 rounded-xl bg-violet-600 font-bold">🗑️ ลบรูป</button>
+            <button type="button" onClick={() => finish(false)} className="min-h-14 rounded-xl bg-violet-600 font-bold text-white">🗑️ ลบรูป</button>
             <button type="button" onClick={() => finish(true)} className="min-h-14 rounded-xl bg-slate-700 font-bold">🔒 เก็บรูป</button>
           </div>
         </Card>
       )}
     </div>
-  );
-}
-
-const STATUS_TH: Record<string, string> = {
-  uploaded: "⏳ อัปโหลดแล้ว", ocr_done: "⏳ อ่านแล้ว", reviewing: "🔍 รอตรวจ",
-  saved: "✅ บันทึกแล้ว", failed: "❌ ไม่สำเร็จ", discarded: "🚫 ยกเลิก",
-};
-
-function UploadHistory() {
-  const { version } = useApp();
-  const [rows, setRows] = useState<any[] | null>(null);
-  useEffect(() => {
-    sb.from("schedule_imports").select("id, month, year, import_status, created_at")
-      .eq("kind", "shift").order("created_at", { ascending: false }).limit(10)
-      .then(({ data }) => setRows(data ?? []), () => setRows([]));
-  }, [version]);
-  if (!rows) return <Spinner />;
-  return (
-    <Card>
-      <p className="mb-2 font-bold">📜 ประวัติการอัปโหลดเวรของ Eaw</p>
-      <p className="mb-3 text-sm text-slate-400">Eaw เป็นผู้อัปโหลดตารางเวร</p>
-      {rows.length === 0 && <p className="text-sm">ยังไม่มีประวัติ</p>}
-      <ul className="flex flex-col gap-2">
-        {rows.map(r => (
-          <li key={r.id} className="flex justify-between rounded-lg bg-slate-700/50 px-3 py-2 text-sm">
-            <span>{r.month ? `${MONTH_SHORT[r.month - 1]} ${r.year + 543}` : "—"}</span>
-            <span>{STATUS_TH[r.import_status] ?? r.import_status}</span>
-            <span className="text-slate-400">{new Date(r.created_at).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" })}</span>
-          </li>
-        ))}
-      </ul>
-    </Card>
   );
 }
