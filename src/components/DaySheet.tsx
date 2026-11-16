@@ -1,7 +1,7 @@
-// หน้าต่างรายละเอียดวัน (v2)
-// - Benz: แก้ OT ของตัวเอง + แก้เวรของ Eaw แทนได้
-// - Eaw: แก้เวรของตัวเอง
-// - หมายเหตุของใครของมัน · ปุ่มบันทึก 1 ปุ่ม (บันทึกทุกช่องพร้อมกัน)
+// หน้าต่างรายละเอียดวัน (v4)
+// - Benz: แก้ OT ของตัวเอง + แก้เวรของ Eaw แทนได้ · Eaw: แก้เวรของตัวเอง
+// - หมายเหตุของใครของมัน · ปุ่มบันทึก 1 ปุ่ม
+// - ปัดลงเพื่อปิด · 💬 แชร์ไป LINE · 🎉 วันพิเศษของวันนั้น · ออฟไลน์บันทึกไม่ได้
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { sb } from "../lib/supabase";
 import { loadDays, recompute, isWorking, settingsFromRow, loadSettingsRow, type DayInfo } from "../lib/data";
@@ -11,18 +11,18 @@ import {
   DEFAULT_SETTINGS, type Settings, type BenzDay,
 } from "../lib/matching";
 import { SheetSkeleton } from "./Skeleton";
-import { useOnline, useAnniversary, anniversaryYears } from "../lib/special";
+import { useOnline, useEvents, eventsOn, occLabel } from "../lib/special";
 import { useApp, TimeBar, TimeScale, PrimaryButton, benzLabel, Row, timeOptions, C } from "./ui";
 
 type OtMode = "none" | "unknown" | "time";
 
 export default function DaySheet({ date, onClose }: { date: string; onClose: () => void }) {
-  const { me, profiles, types, typeMap, toast, version } = useApp();
+  const { me, profiles, types, typeMap, toast, version, goTab } = useApp();
   const eawId = profiles.find(p => p.role === "wannika")?.id ?? "";
   const isBenz = me.role === "bulakorn";
   const online = useOnline();
-  const ann = useAnniversary(version);
-  const annYears = anniversaryYears(date, ann);
+  const events = useEvents(version);
+  const dayEvents = eventsOn(date, events);
 
   const [day, setDay] = useState<DayInfo | null>(null);
   const [st, setSt] = useState<Settings>(DEFAULT_SETTINGS);
@@ -35,9 +35,9 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   const [code, setCode] = useState("");
   const [leaveFree, setLeaveFree] = useState(true);
   const [note, setNote] = useState("");
-  const [init, setInit] = useState("");
+  const [init, setInit] = useState<[OtMode, number, number, string, boolean, string]>(["none", 990, 1200, "", true, ""]);
 
-  // ปัดลงเพื่อปิด (เริ่มปัดได้เมื่อเนื้อหาเลื่อนอยู่บนสุด)
+  // ---------- ปัดลงเพื่อปิด ----------
   const panel = useRef<HTMLDivElement>(null);
   const dragY = useRef<number | null>(null);
   const [drag, setDrag] = useState(0);
@@ -71,7 +71,7 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
         const lf0 = d.shift?.leaveIsFree ?? true;
         const n0 = d.notes.find(n => n.user_id === me.id)?.note ?? "";
         setOtMode(mode); setOtStart(s0); setOtEnd(e0); setCode(c0); setLeaveFree(lf0); setNote(n0);
-        setInit(JSON.stringify([mode, s0, e0, c0, lf0, n0]));
+        setInit([mode, s0, e0, c0, lf0, n0]);
       })
       .catch(() => setError("โหลดข้อมูลไม่ได้"));
   }, [date, version]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,16 +81,15 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
-  }, [onClose]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const working = isWorking(day?.dayType ?? null);
   const qeDay = !!day?.qe;
-  const otDirty = JSON.stringify([otMode, otStart, otEnd]) !== JSON.stringify(JSON.parse(init || "[]").slice(0, 3));
-  const shiftDirty = JSON.stringify([code, leaveFree]) !== JSON.stringify(JSON.parse(init || "[]").slice(3, 5));
-  const noteDirty = note !== (JSON.parse(init || "[]")[5] ?? "");
+  const otDirty = otMode !== init[0] || (otMode !== "none" && (otStart !== init[1] || otEnd !== init[2]));
+  const shiftDirty = code !== init[3] || leaveFree !== init[4];
+  const noteDirty = note !== init[5];
   const dirty = otDirty || shiftDirty || noteDirty;
 
-  // ผลตัวอย่างสด (ก่อนบันทึก)
   const preview = useMemo(() => {
     if (!day) return null;
     let ot: BenzDay["ot"] = day.ot ? { start: day.ot.start, end: day.ot.end } : null;
@@ -107,7 +106,6 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
     if (!navigator.onLine) { toast("📶 ออฟไลน์อยู่ บันทึกไม่ได้"); return; }
     setSaving(true);
     try {
-      // 1) OT (เฉพาะ Benz, ไม่แตะวันที่มาจาก QE Tracker)
       if (isBenz && otDirty && !qeDay) {
         if (otMode === "none") {
           const { error } = await sb.from("overtime").delete().eq("user_id", me.id).eq("work_date", date);
@@ -121,7 +119,6 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
           if (error) throw error;
         }
       }
-      // 2) เวรของ Eaw (Eaw แก้เอง หรือ Benz แก้แทน)
       if (shiftDirty && code && eawId) {
         const t = typeMap.get(code)!;
         const segs = union(t.busy_segments);
@@ -135,7 +132,6 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
         }, { onConflict: "user_id,shift_date" });
         if (error) throw error;
       }
-      // 3) หมายเหตุของฉัน
       if (noteDirty) {
         const trimmed = note.trim().slice(0, 100);
         if (trimmed) {
@@ -156,13 +152,16 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
     }
   }
 
+  const r = preview;
+
   // 💬 แชร์สรุปวันนี้ (Web Share → ถ้าไม่รองรับ เปิด LINE share)
   async function share() {
     if (!day || !r) return;
     const b = benzLabel(day);
     const e = typeMap.get(code);
     const text = [
-      `📅 ${thaiDate(date, true)}${annYears ? ` 💍 ครบรอบ ${annYears} ปี` : ""}`,
+      `📅 ${thaiDate(date, true)}`,
+      ...dayEvents.map(o => `${o.ev.icon} ${occLabel(o)}`),
       `👨‍💼 Benz: ${b.icon} ${b.text}`,
       `🏥 Eaw: ${e ? `${e.icon} ${e.label_th}` : "ยังไม่มีเวร"}`,
       `${LEVEL_ICON[r.level]} ${windowsText(r)}`,
@@ -175,7 +174,6 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
   }
 
   const otherNotes = day?.notes.filter(n => n.user_id !== me.id) ?? [];
-  const r = preview;
 
   return (
     <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 sm:items-center"
@@ -188,9 +186,9 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
           transition: dragY.current === null ? "transform .2s ease" : "none", overscrollBehavior: "contain" }}
         className="sheet-in max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl">
         <div className="-mt-2 flex justify-center py-2" aria-hidden><span className="h-1.5 w-10 rounded-full bg-slate-600" /></div>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-lg font-extrabold">{thaiDate(date, true)}</h2>
-          <div className="flex gap-2">
+          <div className="flex shrink-0 gap-2">
             {r && <button type="button" onClick={share} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="แชร์ไป LINE">💬</button>}
             <button type="button" onClick={close} className="h-10 w-10 rounded-full bg-slate-800 text-lg" aria-label="ปิด">✕</button>
           </div>
@@ -199,15 +197,26 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
         {!day && !error && <SheetSkeleton />}
         {day && r && (
           <div className="flex flex-col gap-3">
-            {annYears && (
-              <p className="rounded-2xl bg-gradient-to-r from-pink-500/25 to-violet-500/25 px-3 py-2 font-extrabold">💍 ครบรอบแต่งงาน {annYears} ปี 🎉</p>
-            )}
+            {/* 🎉 วันพิเศษของวันนี้ */}
+            {dayEvents.map(o => (
+              <div key={o.ev.id} className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-pink-500/25 to-violet-500/25 px-3 py-2">
+                <span className="text-3xl" aria-hidden>{o.ev.icon}</span>
+                <span className="min-w-0">
+                  <span className="block font-extrabold">{occLabel(o)} 🎉</span>
+                  {o.ev.note && <span className="block truncate text-sm text-slate-300">📝 {o.ev.note}</span>}
+                </span>
+              </div>
+            ))}
+
             <div className="rounded-2xl p-3" style={{ background: LEVEL_COLOR[r.level] + "1f" }}>
               <p className="text-lg font-extrabold" style={{ color: LEVEL_COLOR[r.level] }} aria-live="polite">
                 {LEVEL_ICON[r.level]} {windowsText(r)}
               </p>
               <p className="text-sm font-semibold">{suggestion(r)}</p>
               {r.hints.map(h => <p key={h} className="text-sm font-semibold text-amber-300">{h}</p>)}
+              {dayEvents.length > 0 && r.level === "red" && (
+                <p className="text-sm font-semibold text-amber-300">⚠️ วันพิเศษแต่ไม่ว่างตรงกัน ลองแลกเวร/ลาล่วงหน้า</p>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5 rounded-2xl bg-slate-800 p-3">
@@ -254,7 +263,7 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
               </fieldset>
             )}
 
-            {/* 🏥 เวรของ Eaw (Benz แก้แทนได้) */}
+            {/* 🏥 เวรของ Eaw */}
             <fieldset className="flex flex-col gap-2 rounded-2xl bg-slate-800 p-3">
               <legend className="px-1 text-sm font-semibold text-slate-400">🏥 เวรของ Eaw{isBenz ? " · แก้แทน" : ""}</legend>
               <div className="grid grid-cols-2 gap-2">
@@ -286,6 +295,11 @@ export default function DaySheet({ date, onClose }: { date: string; onClose: () 
             <PrimaryButton disabled={!dirty || saving || otInvalid || !online} onClick={save}>
               {!online ? "📶 ออฟไลน์ · บันทึกไม่ได้" : saving ? "⏳ กำลังบันทึก..." : "💾 บันทึก"}
             </PrimaryButton>
+            {dayEvents.length === 0 && (
+              <button type="button" onClick={() => { close(); goTab("settings"); }} className="text-sm font-semibold text-slate-400">
+                🎉 ตั้งวันนี้เป็นวันพิเศษ ›
+              </button>
+            )}
           </div>
         )}
       </div>

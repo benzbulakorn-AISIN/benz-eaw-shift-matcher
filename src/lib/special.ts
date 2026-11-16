@@ -1,40 +1,89 @@
-// 💍 วันครบรอบ + 📶 แคชข้อมูลไว้ใช้ตอนออฟไลน์
+// 🎉 วันพิเศษ (หลายรายการ) + 📶 แคชข้อมูลไว้ใช้ตอนออฟไลน์
 import { useEffect, useState } from "react";
 import { sb } from "./supabase";
 
-// ---------- วันครบรอบ ----------
-let annCache: string | null | undefined;
-export async function loadAnniversary(force = false): Promise<string | null> {
-  if (annCache !== undefined && !force) return annCache;
-  const { data } = await sb.from("app_settings").select("anniversary_date").eq("id", 1).maybeSingle();
-  annCache = (data?.anniversary_date as string | null) ?? null;
-  return annCache;
+export type SpecialEvent = {
+  id: string; title: string; icon: string; event_date: string;
+  yearly: boolean; show_years: boolean; remind_days: number; note: string | null;
+};
+export type Occurrence = { ev: SpecialEvent; date: string; days: number; years: number | null };
+
+// ---------- โหลด ----------
+let cache: SpecialEvent[] | undefined;
+export async function loadEvents(force = false): Promise<SpecialEvent[]> {
+  if (cache && !force) return cache;
+  const { data, error } = await sb.from("special_events").select("*").order("event_date");
+  if (error) throw error;
+  cache = (data ?? []) as SpecialEvent[];
+  return cache;
+}
+export function useEvents(version = 0): SpecialEvent[] {
+  const [list, setList] = useState<SpecialEvent[]>(cache ?? []);
+  useEffect(() => { loadEvents(version > 0).then(setList).catch(() => undefined); }, [version]);
+  return list;
 }
 
-export function useAnniversary(version = 0): string | null {
-  const [ann, setAnn] = useState<string | null>(annCache ?? null);
-  useEffect(() => { loadAnniversary(version > 0).then(setAnn).catch(() => undefined); }, [version]);
-  return ann;
+// ---------- คำนวณวัน ----------
+const pad = (n: number) => String(n).padStart(2, "0");
+const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+const diffDays = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+
+/** วันที่ของ event ในปี y (29 ก.พ. → 28 ก.พ. ในปีที่ไม่ใช่อธิกสุรทิน) */
+function dateInYear(ev: SpecialEvent, y: number): string {
+  const [, m, d] = ev.event_date.split("-").map(Number);
+  const dd = m === 2 && d === 29 && !isLeap(y) ? 28 : d;
+  return `${y}-${pad(m)}-${pad(dd)}`;
 }
 
-/** คืนจำนวนปีที่ครบ ถ้า date ตรงวันครบรอบ (ปีแรกขึ้นไป) ไม่ใช่คืน null */
-export function anniversaryYears(date: string, ann: string | null): number | null {
-  if (!ann || date.slice(5) !== ann.slice(5)) return null;
-  const y = Number(date.slice(0, 4)) - Number(ann.slice(0, 4));
-  return y >= 1 ? y : null;
+function yearsAt(ev: SpecialEvent, date: string): number | null {
+  if (!ev.yearly || !ev.show_years) return null;
+  const n = Number(date.slice(0, 4)) - Number(ev.event_date.slice(0, 4));
+  return n >= 1 ? n : null;
 }
 
-/** จำนวนวันจาก today ถึงวันครบรอบครั้งถัดไป (0 = วันนี้) */
-export function daysToAnniversary(today: string, ann: string | null): { days: number; years: number } | null {
-  if (!ann) return null;
-  const [ty] = today.split("-").map(Number);
-  for (const y of [ty, ty + 1]) {
-    const d = `${y}-${ann.slice(5)}`;
-    const diff = Math.round((Date.parse(d) - Date.parse(today)) / 86_400_000);
-    const years = y - Number(ann.slice(0, 4));
-    if (diff >= 0 && years >= 1 && Number.isFinite(diff)) return { days: diff, years };
+/** ครั้งถัดไปนับจาก from (รวมวันนี้) */
+export function nextOccurrence(ev: SpecialEvent, from: string): Occurrence | null {
+  if (!ev.yearly) {
+    const days = diffDays(from, ev.event_date);
+    return days >= 0 ? { ev, date: ev.event_date, days, years: null } : null;
+  }
+  const y = Number(from.slice(0, 4));
+  for (const yy of [y, y + 1]) {
+    const date = dateInYear(ev, yy);
+    if (date < ev.event_date) continue;          // ก่อนวันจริงครั้งแรก
+    const days = diffDays(from, date);
+    if (days >= 0) return { ev, date, days, years: yearsAt(ev, date) };
   }
   return null;
+}
+
+/** วันพิเศษที่ตรงกับวันที่ date */
+export function eventsOn(date: string, events: SpecialEvent[]): Occurrence[] {
+  return events.flatMap(ev => {
+    const o = nextOccurrence(ev, date);
+    return o && o.days === 0 ? [o] : [];
+  });
+}
+
+/** วันพิเศษที่อยู่ในช่วงเตือน (0 ≤ days ≤ remind_days) เรียงใกล้สุดก่อน */
+export function upcomingEvents(today: string, events: SpecialEvent[]): Occurrence[] {
+  return events
+    .map(ev => nextOccurrence(ev, today))
+    .filter((o): o is Occurrence => !!o && (o.days === 0 || o.days <= o.ev.remind_days))
+    .sort((a, b) => a.days - b.days);
+}
+
+export function occLabel(o: Occurrence): string {
+  return `${o.ev.title}${o.years ? ` · ครบ ${o.years} ปี` : ""}`;
+}
+export function daysText(days: number): string {
+  return days === 0 ? "วันนี้! 🎉" : days === 1 ? "พรุ่งนี้" : `อีก ${days} วัน`;
+}
+
+// ---------- รองรับโค้ดเดิม (หน้าตั้งค่าเวอร์ชันก่อน) ----------
+export async function loadAnniversary(): Promise<string | null> {
+  const { data } = await sb.from("app_settings").select("anniversary_date").eq("id", 1).maybeSingle();
+  return (data?.anniversary_date as string | null) ?? null;
 }
 
 // ---------- ออฟไลน์ ----------
@@ -50,7 +99,7 @@ export function useOnline(): boolean {
 
 type Cached<T> = { at: number; data: T };
 export function saveCache<T>(key: string, data: T) {
-  try { localStorage.setItem(`bem_cache_${key}`, JSON.stringify({ at: Date.now(), data } satisfies Cached<T>)); } catch { /* เต็ม/ปิดไว้ */ }
+  try { localStorage.setItem(`bem_cache_${key}`, JSON.stringify({ at: Date.now(), data })); } catch { /* เต็ม/ปิดไว้ */ }
 }
 export function readCache<T>(key: string): Cached<T> | null {
   try {
